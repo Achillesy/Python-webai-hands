@@ -24,7 +24,7 @@ function ensureNativePort() {
     if (!msg) return;
     if (msg.type === "pong") {
       setBadge("✓", "#2e7d32");
-      // M4 预备：缓存本机 hostname，供 §6.7 路由用
+      // §6.7：缓存本机 hostname，供内容脚本做路由判断
       if (msg.hostname) {
         try {
           const obj = {};
@@ -84,6 +84,10 @@ function ensureNativePort() {
     pending.clear();
     fileBuf.clear();
   });
+  // §6.7 前置条件：建连即 ping，pong 带回 hostname 并缓存到 storage。
+  // 不能依赖用户点图标 —— manifest 配了 default_popup，onClicked 不会触发；
+  // popup 的"测通桥"走自己的直连端口，pong 不经过这里。
+  try { nativePort.postMessage({ type: "ping", id: "__init__" + Date.now() }); } catch (e) {}
   return nativePort;
 }
 

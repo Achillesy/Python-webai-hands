@@ -150,6 +150,11 @@ function loadProcessed(done) {
       if (res && res[HOSTNAME_KEY]) {
         localHostname = res[HOSTNAME_KEY];
         console.log('[webai-hands] 本机 hostname（缓存）：' + localHostname);
+      } else {
+        // §6.7 前置条件：建连触发后台 ping host，延迟重试读取。
+        // getPort() 会走到 background onConnect → ensureNativePort → ping → pong → 缓存。
+        try { getPort(); } catch (e) {}
+        retryHostname(0);
       }
       ready = true;
       if (done) done();
@@ -158,6 +163,28 @@ function loadProcessed(done) {
     ready = true;
     if (done) done();
   }
+}
+
+// hostname 拿不到就重试几次（2s / 5s / 10s），仍没有说明 host 未装好
+function retryHostname(n) {
+  var waits = [2000, 5000, 10000];
+  if (n >= waits.length) {
+    console.log('[webai-hands] 未拿到本机 hostname：host 可能未安装或未启动，§6.7 路由不生效');
+    return;
+  }
+  setTimeout(function () {
+    if (localHostname) return;
+    try {
+      chrome.storage.local.get([HOSTNAME_KEY], function (res) {
+        if (res && res[HOSTNAME_KEY]) {
+          localHostname = res[HOSTNAME_KEY];
+          console.log('[webai-hands] 本机 hostname（延迟拿到）：' + localHostname);
+        } else {
+          retryHostname(n + 1);
+        }
+      });
+    } catch (e) { retryHostname(n + 1); }
+  }, waits[n]);
 }
 
 function markProcessed(id) {
@@ -224,7 +251,7 @@ function getPort() {
   return pagePort;
 }
 
-// ---------- hostname 路由（DESIGN §6.7 预留） ----------
+// ---------- hostname 路由（DESIGN §6.7） ----------
 function hostMatches(want) {
   if (!localHostname) return true;  // 未拿到本机 hostname 时先放行
   return want.toLowerCase() === localHostname.toLowerCase();

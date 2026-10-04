@@ -11,16 +11,11 @@
       "js": [
         "adapters/muse.js",
         "adapters/deepseek.js",
-        "adapters/gemini.js",
-        "adapters/chatgpt.js",
-        "adapters/aimode.js",
         "content.js"
       ],
       "matches": [
         "https://muse.ai/*",
-        "https://chat.deepseek.com/*",
-        "https://gemini.google.com/*",
-        "https://chatgpt.com/*"
+        "https://chat.deepseek.com/*"
       ],
       "run_at": "document_idle"
     }
@@ -28,9 +23,7 @@
   "description": "把网页 AI 聊天里的命令块递给本机程序执行，再把结果填回页面。",
   "host_permissions": [
     "https://muse.ai/*",
-    "https://chat.deepseek.com/*",
-    "https://gemini.google.com/*",
-    "https://chatgpt.com/*"
+    "https://chat.deepseek.com/*"
   ],
   "icons": {
     "16": "icons/icon16.png",

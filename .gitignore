@@ -15,3 +15,6 @@ native-host/exec_history.json
 local-archive/
 extension/*.bak
 *.bak
+
+# store submission artifacts (reproducible via store/build.sh)
+store/*.zip

@@ -19,6 +19,7 @@
 var STABLE_MS = 1000;
 var VERSION = (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) ? chrome.runtime.getManifest().version : "?";
 var MAX_RESULT = 6000;
+var MAX_CMD_BYTES = 512 * 1024; // 单块命令上限：Chrome 原生消息通道单条硬上限 1MB，留足余量（host 侧文件分块取 500KB 同理）
 var KEEP_HEAD = 2000;
 var KEEP_TAIL = 3500;
 var STORE_KEY = 'mh_processed_ids';
@@ -435,6 +436,16 @@ function execBlock(block) {
       incompleteWarned[block.id] = true;
       console.log('[webai-hands] 块 ' + block.id + ' 尚无命令正文，等待完整元素');
     }
+    return;
+  }
+  // 单块命令上限：超限直接拒收并回填指引，不转发、不重试（否则原生消息 1MB 硬上限处抛错，提示还含糊）。
+  // 必须 markProcessed，否则下次扫描同一块会反复回填。
+  if (block.cmd.length > MAX_CMD_BYTES) {
+    console.log('[webai-hands] 块 ' + block.id + ' 命令过大（' + block.cmd.length + ' 字符），拒收');
+    markProcessed(block.id);
+    fillBack('[exec ' + block.id + '] 命令过大（约 ' + Math.round(block.cmd.length / 1024) +
+      'KB，单块上限 512KB），已拒收、未执行。' +
+      '请拆成多个小块分次执行（如分块 >> 追加写文件），或请用户把大文件以附件形式发给你再用 attach 通道。请换新 id 重发。');
     return;
   }
   inFlight[block.id] = true;

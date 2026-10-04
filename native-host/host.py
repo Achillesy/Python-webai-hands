@@ -32,6 +32,7 @@ STDOUT_HEAD_LEN = 500  # 每条只保留输出前 500 字符（ctx_summary 只�
 # 曾存全量 stdout 导致 22MB 膨胀；现只存元数据 + 输出摘要。全量输出
 # 本来就回填到页面了，页面即记录。UUID 不存（日志在本机，本机隐含）。
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 单文件上限 25MB
+MAX_CMD_BYTES = 512 * 1024  # 单条命令上限 512KB（Chrome 原生消息单条硬上限 1MB，留足余量；与扩展侧一致）
 CHUNK_B64 = 500 * 1024  # 每块 base64 字符数（原始 ~375KB，留足 1MB 消息余量）
 FILE_DENY = (
     "/.ssh/", "/.aws/", "/.gnupg/", "/.config/gcloud/",
@@ -173,6 +174,14 @@ def run_exec(msg):
             "ts": h.get("ts", 0),
         }
     cmd = msg.get("cmd", "")
+    # 纵深防御：扩展侧已拒收超限块，这里再拦一道（直连 host 的非常规路径）
+    if len(cmd.encode("utf-8", "ignore")) > MAX_CMD_BYTES:
+        log("exec id=%s oversize cmd, rejected" % rid)
+        return {
+            "type": "error",
+            "id": rid,
+            "error": "命令过大（单条上限 512KB），已拒收。请拆成多个小块分次执行，或走 attach 通道传大文件。",
+        }
     if cmd.strip() == "__diag__":
         return run_diag(msg)
     if cmd.strip() == "__ctx_summary__":

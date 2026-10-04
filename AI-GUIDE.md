@@ -66,9 +66,10 @@ class/父元素/HTML 片段（前 200 字），最多前 10 个。
 
 把本机文件作为**对话附件**上传（不是文本），比 cat 回传文本更完整、不受截断影响。
 
-    {"host":"本机UUID","muse":"attach","id":"att-001","path":"/abs/path/x.pdf","text":"说明","send":true}
+    {"muse":"attach","id":"att-001","v":2,"host":"本机UUID","path":"/abs/path/x.pdf","text":"说明"}
 
-- path：绝对路径（必填）。text：可选说明。send：true 则上传后自动发送。
+- path：绝对路径（必填）。text：可选说明，上传后填回。注意：v 字段必填（v>=2 才是合法块，缺了会被静默丢弃）。
+- 别用 send:true 批量传 —— 每个文件会单独发一条消息，刷屏。
 - 流程：host 读文件 → base64 → 扩展重组 → content.js 构造 File 塞进页面 input。
 - 单文件上限 25MB。敏感路径（.ssh/.aws/.env/密钥/cookie 等）host 侧直接拒。
 - 文件一旦上传就离开本机，敏感文件别传。

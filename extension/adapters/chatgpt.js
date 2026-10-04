@@ -63,8 +63,12 @@
     },
 
     clickSend: function () {
+      // 2026-10-04 VM 实测：data-testid="send-button" 最稳定；aria-label="发送提示词" 仍有效；
+      // id="composer-submit-button" 备用。按钮仅输入框非空时渲染（空时是语音按钮）。
       var sels = [
+        '[data-testid="send-button"]',
         'button[aria-label="发送提示词"]',
+        '#composer-submit-button',
         'button[aria-label="Send"]'
       ];
       for (var i = 0; i < sels.length; i++) {

@@ -628,19 +628,31 @@ function fillBack(text) {
 function maybeAutoSend() {
   try {
     chrome.storage.local.get([AUTO_KEY], function (res) {
-      if (res && res[AUTO_KEY]) setTimeout(trySend, 300);
+      if (res && res[AUTO_KEY]) {
+        // 发送按钮是输入内容后渲染的；大文本插入时框架可能慢半拍，最多重试 4 次
+        var n = 0;
+        (function attempt() {
+          if (doClickSend()) { console.log('[webai-hands] 已自动发送'); return; }
+          if (++n < 4) setTimeout(attempt, 400);
+          else console.log('[webai-hands] 自动发送：多次未找到发送按钮，保持只填不发');
+        })();
+      }
     });
   } catch (e) {}
 }
 
-function trySend() {
+function doClickSend() {
   var ok = false;
   selfActing = true;
   try { ok = adapter.clickSend(); } catch (e) {
     console.error('[webai-hands] adapter.clickSend 抛异常：', e);
     ok = false;
   } finally { selfActing = false; }
-  if (ok) console.log('[webai-hands] 已自动发送');
+  return !!ok;
+}
+
+function trySend() {
+  if (doClickSend()) console.log('[webai-hands] 已自动发送');
   else console.log('[webai-hands] 未找到发送按钮，保持只填不发');
 }
 

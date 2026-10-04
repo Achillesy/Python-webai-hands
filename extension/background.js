@@ -13,6 +13,7 @@ const PLATFORM_KEY = "mh_platform";
 let nativePort = null;
 const pending = new Map(); // exec id -> {port, session, gen}
 const fileBuf = new Map(); // read_file id -> 累积的 file_chunk
+let fileBufTimer = null; // P1-1: single-shot timeout guard for incomplete fileBuf
 const pingTests = new Map(); // ping_test id -> {timer, sendResponse}（办法二：popup 测通桥）
 
 // ---------- Layer 1 调度器 ----------
@@ -159,7 +160,7 @@ function ensureNativePort() {
       if (!buf) {
         buf = { name: msg.name, mime: msg.mime, size: msg.size,
                 total: msg.total, chunks: [] };
-        fileBuf.set(msg.id, buf);
+        fileBuf.set(msg.id, buf); if (fileBufTimer) clearTimeout(fileBufTimer); fileBufTimer = setTimeout(function(){ for (var fid of fileBuf.keys()) { var e3 = pending.get(fid); if (e3 && e3.port) { try { e3.port.postMessage({type:"error",id:fid,gen:e3.gen,error:"file timeout 30s"}); } catch (ee) {} } pending.delete(fid); } fileBuf.clear(); hostBusy = false; running = null; setBadge("X","#c62828"); pump(); }, 30000);
       }
       buf.chunks[msg.index] = msg.data;
       var got = 0;

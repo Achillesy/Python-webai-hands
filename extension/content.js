@@ -671,4 +671,11 @@ loadProcessed(function () {
   scan();
   console.log('[webai-hands] 内容脚本已启动 v' + VERSION + '：需 v>=2 的块才执行，结果默认只填回不发送。');
 });
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area !== "local" || !changes[MACHINE_KEY]) return;
+  var nv = changes[MACHINE_KEY].newValue;
+  if (!nv || localMachineId) return;
+  localMachineId = nv;
+  try { scan(); } catch (e) {}
+});
 })();

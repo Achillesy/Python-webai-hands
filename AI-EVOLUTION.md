@@ -91,3 +91,29 @@ content.js 启动日志会打印版本（VERSION 取自 manifest，不用两处�
 - 日常交互、安全边界 → AI-GUIDE.md
 - 安装、测通桥、排错 → AI-INSTALL.md
 - 操作 Blender → AI-BLENDER.md
+
+## 7. Known pitfalls (learned the hard way)
+
+### 7.1 Message render truncation != command truncation
+
+The chat renderer truncates long muse-exec blocks visually, but the sent command is intact.
+Judge by execution result (file size, file content), never by your own message rendering.
+Do not fire an extra reconnaissance round based on visual truncation alone.
+
+### 7.2 PowerShell variable names are case-INSENSITIVE
+
+`$M` and `$m` are the SAME variable. `$m = Get-Content -Raw $M` overwrites the path
+variable with file content, then `WriteAllText($M, ...)` throws "Illegal characters in path".
+Use entirely different spellings, never rely on case to distinguish variables.
+
+### 7.3 Prefer ASCII anchors when patching; write new comments in English
+
+Chinese literals inside a PowerShell command line may be corrupted on some
+CHCP / encoding configurations. When editing Chinese comments in code, locate the
+line via an ASCII anchor (e.g. `// ProseMirror`) and write the replacement in English,
+so you never introduce a new Chinese literal into the command.
+
+### 7.4 Keep each command block short
+
+See AI-GUIDE.md §6. Split long scripts into small blocks (<= 10 lines each),
+append with Add-Content or WriteAllText one piece at a time.

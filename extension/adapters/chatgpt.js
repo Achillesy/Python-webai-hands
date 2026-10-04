@@ -39,22 +39,22 @@
     fillResult: function (text) {
       var ed = this.findInput();
       if (!ed) return false;
-      try { ed.focus(); } catch (e) {}
-      // ProseMirror：先选中现有内容，再用 insertText 替换，走它的输入管线
+      try { ed.focus(); } catch (e) {} var hasText = !!(ed.textContent || '').trim();
+      // ProseMirror: empty -> select-all to activate input pipeline; has draft -> collapse caret to end and append (never wipe user input)
       try {
         var sel = window.getSelection();
         var range = document.createRange();
-        range.selectNodeContents(ed);
+        range.selectNodeContents(ed); if (hasText) range.collapse(false);
         sel.removeAllRanges();
         sel.addRange(range);
-        if (document.execCommand('insertText', false, text)) {
+        var ins = hasText ? ('\n' + text) : text; if (document.execCommand('insertText', false, ins)) {
           ed.dispatchEvent(new Event('input', { bubbles: true }));
           return true;
         }
       } catch (e) {}
       // 兜底：直接写 textContent
       try {
-        ed.textContent = text;
+        ed.textContent = (hasText ? (ed.textContent + '\n') : '') + text;
         ed.dispatchEvent(new Event('input', { bubbles: true }));
         return true;
       } catch (e) {

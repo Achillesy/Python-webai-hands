@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # webai-hands 本地 host（Chrome Native Messaging）
 #
 # Chrome 通过 stdio 把它拉起：扩展发来的消息是 4 字节小端长度前缀
@@ -23,6 +23,7 @@ import ctx_summary
 
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host.log")
 DEFAULT_TIMEOUT = 120  # 秒；M1 先给保守值，截断/超时策略 M3 定型
+HOST_CWD = os.path.expanduser("~")  # fixed cwd: predictable, idempotent
 HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exec_history.json")
 HISTORY_LIMIT = 500  # 最多保留最近 500 条 id 的执行记录
 HISTORY_MAX_BYTES = 1 * 1024 * 1024  # 文件总大小上限 1MB（条数之外的双保险）
@@ -184,7 +185,8 @@ def run_exec(msg):
     started = time.time()
     error = None
     proc = subprocess.Popen(
-        shell_argv(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        shell_argv(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    cwd=HOST_CWD,
     )
     box = {}
 

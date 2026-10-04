@@ -1,4 +1,4 @@
-﻿// webai-hands 内容脚本（核心层，与站点无关）
+// webai-hands 内容脚本（核心层，与站点无关）
 //
 // 架构：核心层 + 适配器层（每站点一份）。
 // 适配器通过 window.__museHandsAdapters[hostname] 注册；
@@ -631,6 +631,7 @@ function scan() {
     var genAtSchedule = gen;
     clearTimeout(stableTimers[fp]);
     stableTimers[fp] = setTimeout(function () {
+      delete stableTimers[fp];
       if (genAtSchedule !== gen) return;  // 已被新一代作废，不转发
       if (userAborted || processed[block.id] || inFlight[block.id]) return;
       var again = parseBlock(el.innerText || el.textContent || '');

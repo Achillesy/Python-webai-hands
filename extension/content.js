@@ -291,9 +291,35 @@ function scheduleFlush() {
   flushTimer = setTimeout(flushResults, wait);
 }
 
+// ---------- 扩展上下文失效 ----------
+// 扩展被重新加载/更新后，未刷新的旧标签页里的 content script 再调
+// chrome.runtime.* 会抛 "Extension context invalidated"，且无法自愈，
+// 必须刷新页面。这里提前识别，给出可操作的中文指引，而不是英文原错。
+var contextDead = false;
+function isInvalidatedError(e) {
+  return !!e && /extension context invalid/i.test(e.message || '');
+}
+// context 失效指引只提醒一次（同页多块/重复定时器不刷屏）；刷新页面后重置。
+var deadWarned = false;
+function warnContextDead() {
+  if (deadWarned) return;
+  deadWarned = true;
+  fillBack('扩展已重新加载，请刷新本页面后重试');
+}
+
 function getPort() {
   if (pagePort) return pagePort;
-  pagePort = chrome.runtime.connect({ name: 'webai-hands' });
+  if (contextDead) throw new Error('扩展已重新加载，请刷新本页面后重试');
+  try {
+    pagePort = chrome.runtime.connect({ name: 'webai-hands' });
+  } catch (e) {
+    if (isInvalidatedError(e)) {
+      contextDead = true;
+      console.error('[webai-hands] 扩展上下文已失效：扩展被重新加载/更新，请刷新本页面后重试');
+      throw new Error('扩展已重新加载，请刷新本页面后重试');
+    }
+    throw e;
+  }
   pagePort.onMessage.addListener(function (msg) {
     if (!msg) return;
     // 代数门控：过期代的消息（晚到的结果/错误/文件/忙拒绝）一律丢弃，治"穿透填回"
@@ -411,7 +437,6 @@ function execBlock(block) {
     }
     return;
   }
-  markProcessed(block.id);  // 先落账再执行（host 门控已在稳定计时器统一做）
   inFlight[block.id] = true;
   cmdById[block.id] = block.cmd;
   console.log('[webai-hands] 执行 ' + block.id + '：', block.cmd.slice(0, 120));
@@ -425,10 +450,14 @@ function execBlock(block) {
       shell: block.shell,
       timeout: block.timeout
     });
+    // 发出去才落账：postMessage 抛异常说明根本没发出去，此时不记 processed，
+    // 用户刷新页面后同一块可重发，不丢命令（旧代码先落账会导致刷新后被跳过）。
+    markProcessed(block.id);
   } catch (e) {
     delete inFlight[block.id];
     delete cmdById[block.id];
-    fillBack('发往扩展后台失败：' + e.message);
+    if (contextDead) warnContextDead();
+    else fillBack('发往扩展后台失败：' + e.message);
   }
 }
 
@@ -455,7 +484,6 @@ function attachBlock(block) {
     fillBack('[attach ' + block.id + '] 当前站点适配器不支持上传');
     return;
   }
-  markProcessed(block.id);
   inFlight[block.id] = true;
   cmdById[block.id] = 'attach: ' + block.path;
   attachMeta[block.id] = { text: block.text || null, send: !!block.send };
@@ -463,9 +491,11 @@ function attachBlock(block) {
   try {
     getPort().postMessage({ type: 'read_file', id: block.id, path: block.path,
                             session: SESSION, gen: gen });
+    markProcessed(block.id);  // 发出去才落账（同 execBlock）：发送失败不记，刷新后可重发
   } catch (e) {
     delete inFlight[block.id]; delete attachMeta[block.id];
-    fillBack('[attach ' + block.id + '] 请求文件失败：' + e.message);
+    if (contextDead) warnContextDead();
+    else fillBack('[attach ' + block.id + '] 请求文件失败：' + e.message);
   }
 }
 
@@ -617,6 +647,7 @@ function trySend() {
 // ---------- 扫描 ----------
 function scan() {
   if (!ready) return;
+  if (contextDead) return;  // 扩展已重载：旧 context 做任何事都是徒劳，等用户刷新
   if (!adapterActive()) return;  // 页面级开关（如 google.com 非 AI Mode 页）
   var els;
   try { els = adapter.findBlocks(); } catch (e) {

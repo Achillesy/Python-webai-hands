@@ -134,7 +134,10 @@ function ensureNativePort() {
       try {
         const obj = {};
         if (msg.hostname) obj[HOSTNAME_KEY] = msg.hostname;
-        if (msg.machine_id) obj[MACHINE_KEY] = msg.machine_id;
+        if (msg.machine_id) {
+          obj[MACHINE_KEY] = msg.machine_id;
+          console.log("[webai-hands] pong 已缓存 machine_id=" + msg.machine_id);
+        }
         if (msg.platform) obj[PLATFORM_KEY] = msg.platform;
         if (Object.keys(obj).length) chrome.storage.local.set(obj);
       } catch (e) {}
@@ -238,6 +241,11 @@ chrome.action.onClicked.addListener(() => {
 
 chrome.runtime.onConnect.addListener((pagePort) => {
   if (pagePort.name !== "webai-hands") return;
+  // M4：内容脚本建连即建 native 端口并 ping（ensureNativePort 内部发 __init__ ping），
+  // pong 带回 machine_id/hostname/platform 缓存到 storage。
+  // 不能等到首个命令才建连 —— 否则 machine_id 在首个命令到来前永远拿不到，
+  // 严格点名下所有块都会被暂缓（2026-10-04 真站实测发现此 bug）。
+  try { ensureNativePort(); } catch (e) {}
   pagePort.onMessage.addListener((msg) => {
     if (msg && msg.type === "exec" && msg.id && msg.cmd) {
       enqueue(pagePort, "exec", msg);

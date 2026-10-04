@@ -24,6 +24,8 @@ var KEEP_TAIL = 3500;
 var STORE_KEY = 'mh_processed_ids';
 var AUTO_KEY = 'mh_auto_send';
 var HOSTNAME_KEY = 'mh_local_hostname';
+var MACHINE_KEY = 'mh_machine_id';
+var PLATFORM_KEY = 'mh_platform';
 
 // ---------- 选适配器 ----------
 var adapters = window.__museHandsAdapters || {};
@@ -43,6 +45,8 @@ var stableTimers = {};
 var ready = false;
 var pagePort = null;
 var localHostname = null;
+var localMachineId = null;  // M4 严格点名：本机 UUID（host 生成并持久化）
+var localPlatform = null;
 var incompleteAt = {};
 var pendingResults = [];
 var flushTimer = null;
@@ -117,6 +121,7 @@ function abortChain(reason) {
   flushHardDeadline = 0;
   // 代数 +1：旧代命令/结果全部过期；通知 background 丢弃本会话排队项
   gen++;
+  nagTotalThisGen = 0;  // 新一代重置 nag 熔断计数
   try { getPort().postMessage({ type: 'stop', session: SESSION, gen: gen }); } catch (e) {}
   // 有实际作废才代发通知：纯文本停止（无命令在跑）不打扰
   if (nTimers + nFlight > 0) sendCancelNotice(gen, nTimers, nFlight);
@@ -179,17 +184,23 @@ function fingerprint(text) {
 // ---------- 去重 ----------
 function loadProcessed(done) {
   try {
-    chrome.storage.local.get([STORE_KEY, HOSTNAME_KEY], function (res) {
+    chrome.storage.local.get([STORE_KEY, HOSTNAME_KEY, MACHINE_KEY, PLATFORM_KEY], function (res) {
       var ids = (res && res[STORE_KEY]) || [];
       ids.forEach(function (id) { processed[id] = true; });
       if (res && res[HOSTNAME_KEY]) {
         localHostname = res[HOSTNAME_KEY];
         console.log('[webai-hands] 本机 hostname（缓存）：' + localHostname);
-      } else {
-        // §6.7 前置条件：建连触发后台 ping host，延迟重试读取。
+      }
+      if (res && res[MACHINE_KEY]) {
+        localMachineId = res[MACHINE_KEY];
+        console.log('[webai-hands] 本机 machine_id（缓存）：' + localMachineId);
+      }
+      if (res && res[PLATFORM_KEY]) localPlatform = res[PLATFORM_KEY];
+      if (!localMachineId) {
+        // M4 严格点名前置条件：建连触发后台 ping host，延迟重试读取。
         // getPort() 会走到 background onConnect → ensureNativePort → ping → pong → 缓存。
         try { getPort(); } catch (e) {}
-        retryHostname(0);
+        retryMachineIdentity(0);
       }
       ready = true;
       if (done) done();
@@ -200,25 +211,31 @@ function loadProcessed(done) {
   }
 }
 
-// hostname 拿不到就重试几次（2s / 5s / 10s），仍没有说明 host 未装好
-function retryHostname(n) {
+// 机器身份（machine_id）拿不到就重试几次（2s / 5s / 10s）。
+// 严格点名要求 machine_id 就绪才执行块；拿不到时块暂缓（不标记 processed），
+// 不沿用 hostname 时代的 fail-open。
+function retryMachineIdentity(n) {
   var waits = [2000, 5000, 10000];
   if (n >= waits.length) {
-    console.log('[webai-hands] 未拿到本机 hostname：host 可能未安装或未启动，§6.7 路由不生效');
+    console.log('[webai-hands] 未拿到本机 machine_id：host 可能未安装或未启动，严格点名下块将暂缓执行');
     return;
   }
   setTimeout(function () {
-    if (localHostname) return;
+    if (localMachineId) return;
     try {
-      chrome.storage.local.get([HOSTNAME_KEY], function (res) {
-        if (res && res[HOSTNAME_KEY]) {
+      chrome.storage.local.get([HOSTNAME_KEY, MACHINE_KEY, PLATFORM_KEY], function (res) {
+        if (res && res[HOSTNAME_KEY] && !localHostname) {
           localHostname = res[HOSTNAME_KEY];
           console.log('[webai-hands] 本机 hostname（延迟拿到）：' + localHostname);
-        } else {
-          retryHostname(n + 1);
         }
+        if (res && res[MACHINE_KEY] && !localMachineId) {
+          localMachineId = res[MACHINE_KEY];
+          console.log('[webai-hands] 本机 machine_id（延迟拿到）：' + localMachineId);
+        }
+        if (res && res[PLATFORM_KEY] && !localPlatform) localPlatform = res[PLATFORM_KEY];
+        if (!localMachineId) retryMachineIdentity(n + 1);
       });
-    } catch (e) { retryHostname(n + 1); }
+    } catch (e) { retryMachineIdentity(n + 1); }
   }, waits[n]);
 }
 
@@ -300,10 +317,67 @@ function getPort() {
   return pagePort;
 }
 
-// ---------- hostname 路由（DESIGN §6.7） ----------
+// ---------- M4 严格点名（UUID） ----------
+// host 字段只认 machine_id（UUID）；hostname 只做人类可读标签，不参与匹配。
+// hostname 可重名、可被改动，不能做身份标识。
 function hostMatches(want) {
-  if (!localHostname) return true;  // 未拿到本机 hostname 时先放行
-  return want.toLowerCase() === localHostname.toLowerCase();
+  return !!localMachineId && want === localMachineId;
+}
+
+// 严格点名门控（exec/probe/attach 三路统一）：
+//   'pass'   放行；'defer' 暂缓（machine_id 未就绪，不标记 processed）；
+//   'ignore' 已处理（点名他机 / 熔断）；'nag' 缺 host，走自愈提醒。
+function checkHostGate(block) {
+  if (!localMachineId) {
+    console.log('[webai-hands] machine_id 未就绪，块 ' + block.id + ' 暂缓');
+    return 'defer';
+  }
+  // bootstrap 豁免：__diag__ 是 AI 拿到 machine_id 的唯一通道，自己不能要求 host。
+  // 注意 diag 走 exec 块（host.py run_exec 特判），不限 kind。
+  if ((block.cmd || '').trim() === '__diag__') return 'pass';
+  if (block.host === '*') return 'pass';  // 显式广播
+  if (block.host && hostMatches(block.host)) return 'pass';  // 点名本机
+  if (block.host) {
+    console.log('[webai-hands] 块 ' + block.id + ' 目标机器 ' + block.host + ' 与本机不符，静默忽略');
+    markProcessed(block.id);
+    return 'ignore';
+  }
+  return 'nag';  // 没写 host：走 nag 自愈流程
+}
+
+var nagCountById = {};
+var nagTotalThisGen = 0;
+var NAG_PER_BLOCK = 1;  // 单块最多提醒 1 次
+var NAG_GLOBAL_CAP = 5; // 每 tab 每代全局封顶，超了只写 console（防 AI 装傻刷屏）
+
+// 缺 host 自愈提醒：把本机 UUID 拍到 AI 脸上，请它换新 id 重发。
+// 强发（bypass mh_auto_send，与停止通知同级）——这是协议纠错消息，AI 必须看到。
+// 纯文本，不含 muse-exec 块，不会自触发；selfActing 由 trySend 负责。
+function nagMissingHost(block) {
+  var n = nagCountById[block.id] || 0;
+  if (n >= NAG_PER_BLOCK || nagTotalThisGen >= NAG_GLOBAL_CAP) {
+    if (nagTotalThisGen >= NAG_GLOBAL_CAP) {
+      console.log('[webai-hands] nag 熔断：块 ' + block.id + ' 缺 host，已达提醒上限，不再打扰');
+    }
+    markProcessed(block.id);
+    return;
+  }
+  nagCountById[block.id] = n + 1;
+  nagTotalThisGen++;
+  var msg =
+    '⚠️ [webai-hands] 收到一条没有目标机器 UUID 的命令（id=' + block.id + '），未执行。\n' +
+    '本机 UUID：' + localMachineId + '\n' +
+    '主机名：' + (localHostname || '?') + '，系统：' + (localPlatform || '?') + '\n' +
+    '请重发该命令：换一个新 id，并在 JSON 首行加上 "host":"' + localMachineId + '"。\n' +
+    '（`__diag__` 可免 host，`"host":"*"` 为广播，慎用。）';
+  console.log('[webai-hands] nag 缺 host：块 ' + block.id + '（第 ' + (n + 1) + ' 次）');
+  var ok = false;
+  try { ok = adapter.fillResult(msg); } catch (e) {
+    console.error('[webai-hands] nag 填回失败：', e);
+  }
+  if (ok) setTimeout(trySend, 300);
+  else console.log('[webai-hands] nag 未能填回输入框，仅记日志');
+  markProcessed(block.id);
 }
 
 // ---------- 执行 ----------
@@ -318,13 +392,7 @@ function execBlock(block) {
     }
     return;
   }
-  if (block.host && block.host !== '*' && !hostMatches(block.host)) {
-    console.log('[webai-hands] 块 ' + block.id + ' 目标机器 ' + block.host +
-                ' 与本机不符，静默忽略');
-    markProcessed(block.id);
-    return;
-  }
-  markProcessed(block.id);  // 先落账再执行
+  markProcessed(block.id);  // 先落账再执行（host 门控已在稳定计时器统一做）
   inFlight[block.id] = true;
   cmdById[block.id] = block.cmd;
   console.log('[webai-hands] 执行 ' + block.id + '：', block.cmd.slice(0, 120));
@@ -567,6 +635,11 @@ function scan() {
       if (userAborted || processed[block.id] || inFlight[block.id]) return;
       var again = parseBlock(el.innerText || el.textContent || '');
       if (!again) return;
+      // M4 严格点名门控（exec/probe/attach 三路统一）
+      var gate = checkHostGate(again);
+      if (gate === 'defer') return;              // machine_id 未就绪：暂缓，不标记
+      if (gate === 'ignore') return;             // 点名他机 / 熔断：已标记 processed
+      if (gate === 'nag') { nagMissingHost(again); return; }
       console.log('[webai-hands] 标记块 ' + block.id + ' 已稳定，开始执行');
       if (again.kind === 'probe') probeBlock(again);
       else if (again.kind === 'attach') attachBlock(again);

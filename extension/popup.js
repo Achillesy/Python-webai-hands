@@ -51,3 +51,34 @@ document.getElementById('ping').addEventListener('click', function () {
     statusEl.textContent = '发送失败：' + e.message;
   }
 });
+
+// ---------- 本机标识（M4 严格点名） ----------
+// 显示 hostname（人类标签）+ machine_id（UUID，点名用），一键复制 UUID。
+var midEl = document.getElementById('mid');
+try {
+  chrome.storage.local.get(['mh_local_hostname', 'mh_machine_id'], function (res) {
+    var hn = (res && res.mh_local_hostname) || '?';
+    var mid = (res && res.mh_machine_id) || null;
+    midEl.textContent = mid ? (hn + ' / ' + mid.slice(0, 8) + '…') : '未知（先点"测通桥"）';
+    midEl.title = mid || '';
+  });
+} catch (e) { midEl.textContent = '未知'; }
+document.getElementById('copymid').addEventListener('click', function () {
+  try {
+    chrome.storage.local.get(['mh_machine_id'], function (res) {
+      var mid = res && res.mh_machine_id;
+      if (!mid) { midEl.textContent = '未知（先点"测通桥"）'; return; }
+      function done(ok) { midEl.textContent = ok ? '已复制' : '复制失败'; }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(mid).then(function () { done(true); }, function () { done(false); });
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = mid;
+        document.body.appendChild(ta);
+        ta.select();
+        try { done(document.execCommand('copy')); } catch (e) { done(false); }
+        document.body.removeChild(ta);
+      }
+    });
+  } catch (e) {}
+});

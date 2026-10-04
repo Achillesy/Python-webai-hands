@@ -23,6 +23,6 @@ Chrome 154 的 chrome://inspect 能开调试服务，监听 127.0.0.1:9222。
 
 发 probe 块，content.js 在页面本地执行，只读，不点击不改页面：
 
-    {"muse":"probe","id":"p-001","sel":"input[type=file]"}
+    {"host":"本机UUID","muse":"probe","id":"p-001","sel":"input[type=file]"}
 
 sel 是 CSS 选择器。命中元素会列出 tag/type/name/accept/可见性/尺寸/class/父元素/HTML 片段。最多前 10 个。

@@ -60,7 +60,7 @@ install.py 生成 host 清单并登记到 Chrome（Windows 写 HKCU 注册表）
 
 **模式 3：想自主诊断**
 发诊断块：{"muse":"exec","id":"diag-001","cmd":"__diag__"}
-host 回报 hostname、pid、最近执行记录、host.log 尾巴。据此判断断在哪段。
+host 回报 hostname、machine_id（本机 UUID，点名用）、platform、pid、最近执行记录、host.log 尾巴。据此判断断在哪段。注意：__diag__ 是唯一可免 host 的块（bootstrap）；之后所有块都必须带 "host":"<machine_id>"。
 
 ## 5. 断桥 / 发送失败排错（Windows 实测）
 

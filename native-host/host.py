@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import ctx_summary
 
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host.log")
@@ -32,6 +33,9 @@ FILE_DENY = (
     "/.env", "credentials", "keychain", "cookies", "login data",
     "/etc/shadow", "/etc/sudoers", ".netrc", ".pgpass",
 )
+# 机器唯一标识：hostname 可重名、可被改动，不能做身份标识；
+# machine_id 是 uuid4，与人类命名解耦，host 首次运行时生成并持久化。
+MACHINE_ID_PATH = os.path.join(os.path.expanduser("~"), ".config", "webai-hands", "machine.json")
 
 
 def log(line):
@@ -57,6 +61,28 @@ def save_history(hist):
             json.dump(dict(items), f, ensure_ascii=False, indent=2)
     except OSError:
         pass
+
+
+def get_machine_id():
+    # 机器唯一标识：host 首次运行时生成 uuid4 并持久化到本机文件。
+    # 身份跟机器走，不跟浏览器 profile 走（重装扩展不改变机器身份）。
+    # 删文件重装 = 身份轮换，旧块的 host 点名自然失效，属预期行为。
+    try:
+        with open(MACHINE_ID_PATH, "r", encoding="utf-8") as f:
+            mid = json.load(f).get("machine_id")
+        if mid:
+            return mid
+    except (OSError, ValueError, AttributeError):
+        pass
+    mid = str(uuid.uuid4())
+    try:
+        os.makedirs(os.path.dirname(MACHINE_ID_PATH), exist_ok=True)
+        with open(MACHINE_ID_PATH, "w", encoding="utf-8") as f:
+            json.dump({"machine_id": mid}, f)
+        os.chmod(MACHINE_ID_PATH, 0o600)
+    except OSError:
+        pass
+    return mid
 
 
 def read_message():
@@ -153,6 +179,7 @@ def run_exec(msg):
         "type": "result",
         "id": msg.get("id"),
         "hostname": socket.gethostname(),
+        "machine_id": MACHINE_ID,
         "ok": exit_code == 0 and error is None,
         "exit_code": exit_code,
         "stdout": stdout,
@@ -230,6 +257,7 @@ def run_diag(msg):
             "id": msg.get("id"),
             "hostname": socket.gethostname(),
             "platform": sys.platform,
+            "machine_id": MACHINE_ID,
             "pid": os.getpid(),
             "history_size": len(HISTORY),
             "history_limit": HISTORY_LIMIT,
@@ -251,6 +279,7 @@ def handle(msg):
             "id": msg.get("id"),
             "hostname": socket.gethostname(),
             "platform": sys.platform,
+            "machine_id": MACHINE_ID,
         }
     if t == "exec":
         return run_exec(msg)
@@ -262,13 +291,15 @@ def handle(msg):
 
 
 HISTORY = {}
+MACHINE_ID = None
 
 
 def main():
-    global HISTORY
+    global HISTORY, MACHINE_ID
     HISTORY = load_history()
-    log("host started platform=%s hostname=%s history=%d" % (
-        sys.platform, socket.gethostname(), len(HISTORY)))
+    MACHINE_ID = get_machine_id()
+    log("host started platform=%s hostname=%s machine_id=%s history=%d" % (
+        sys.platform, socket.gethostname(), MACHINE_ID, len(HISTORY)))
     while True:
         msg = read_message()
         if msg is None:

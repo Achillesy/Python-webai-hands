@@ -3,11 +3,13 @@
 // M2：内容脚本经长连接 Port 递来 exec → 转 Native Messaging 给 host →
 //     host 的 result / progress 沿原路回内容脚本。图标徽标即状态：
 //     … 执行中、✓ 就绪/完成、✕ 断开。
-// M4 预备：pong 里的 hostname 缓存进 chrome.storage.local，
-//          供内容脚本读取，做 §6.7 hostname 路由。
+// M4：pong 里的 machine_id（UUID）缓存进 chrome.storage.local，
+//     供内容脚本读取，做严格点名路由。hostname 只保留做人类可读标签。
+const MACHINE_KEY = "mh_machine_id";
 
 const HOST = "com.webai.hands";
 const HOSTNAME_KEY = "mh_local_hostname";
+const PLATFORM_KEY = "mh_platform";
 let nativePort = null;
 const pending = new Map(); // exec id -> {port, session, gen}
 const fileBuf = new Map(); // read_file id -> 累积的 file_chunk
@@ -127,14 +129,15 @@ function ensureNativePort() {
     if (!msg) return;
     if (msg.type === "pong") {
       setBadge("✓", "#2e7d32");
-      // §6.7：缓存本机 hostname，供内容脚本做路由判断
-      if (msg.hostname) {
-        try {
-          const obj = {};
-          obj[HOSTNAME_KEY] = msg.hostname;
-          chrome.storage.local.set(obj);
-        } catch (e) {}
-      }
+      // M4 严格点名：缓存本机 machine_id（UUID），供内容脚本做路由判断；
+      // hostname 只保留做人类可读标签。
+      try {
+        const obj = {};
+        if (msg.hostname) obj[HOSTNAME_KEY] = msg.hostname;
+        if (msg.machine_id) obj[MACHINE_KEY] = msg.machine_id;
+        if (msg.platform) obj[PLATFORM_KEY] = msg.platform;
+        if (Object.keys(obj).length) chrome.storage.local.set(obj);
+      } catch (e) {}
       return;
     }
     if (msg.type === "file_chunk") {

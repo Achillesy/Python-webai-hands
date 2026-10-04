@@ -28,21 +28,25 @@
 
 单行（JSON 带 cmd，推荐，短）：
 
-    {"muse":"exec","id":"唯一id","cmd":"echo hello"}
+    {"muse":"exec","id":"唯一id","host":"本机UUID","cmd":"echo hello"}
 
 两行（JSON 首行，命令从第二行起，适合多行）：
 
-    {"muse":"exec","id":"唯一id"}
+    {"muse":"exec","id":"唯一id","host":"本机UUID"}
     cd /tmp
     ls -la
 
 要点：
 
 - **发真命令必须带 "v":2**；忘了带，块会被静默忽略，看起来像"没反应"。
-- id 必须唯一，建议 日期-主题-序号，如 mh-git-001。
+- **每块必须带 "host"**：值为 `__diag__` 返回的 `machine_id`（本机 UUID，扩展面板也能复制）。
+  没带 host 的块不会执行，扩展会自动回一条提醒告诉你本机 UUID，请换新 id 重发。
+  这是严格点名（M4）：hostname 可重名、不可靠，点名只认 UUID，防多机错抓。
+  `"host":"*"` 为显式广播，慎用；只有 `__diag__` 自己可免 host。
+- id 必须唯一，建议 日期-主题-序号，如 mh-git-001。被打回重发时必须换新 id。
 - 命令经扩展自动执行，结果合并成一条消息自动发回。
 - 多块发在同一条消息里会批处理，只触发一次发送。
-- 不知道路径和系统时，先发 __diag__ 探明（见 AI-INSTALL.md §4 模式 3）。
+- 不知道本机 UUID、路径和系统时，先发 __diag__ 探明（见 AI-INSTALL.md §4 模式 3）。
 - 用户在页面上点"停止/中断"按钮会中止整条链（待执行的块和没发出的结果都会被清掉）；
   之后你发新块会自动恢复。注意 muse.ai 上此功能暂未实现。
 
@@ -51,7 +55,7 @@
 查页面元素、调选择器时发 probe 块。不发给 host，content.js 在页面本地执行，
 只读，不点击不修改。结果填回输入框。
 
-    {"muse":"probe","id":"p-001","sel":"input[type=file]"}
+    {"host":"本机UUID","muse":"probe","id":"p-001","sel":"input[type=file]"}
 
 sel 是 CSS 选择器（不是 JS）。命中元素列出 tag/type/name/accept/可见性/尺寸/
 class/父元素/HTML 片段（前 200 字），最多前 10 个。
@@ -62,7 +66,7 @@ class/父元素/HTML 片段（前 200 字），最多前 10 个。
 
 把本机文件作为**对话附件**上传（不是文本），比 cat 回传文本更完整、不受截断影响。
 
-    {"muse":"attach","id":"att-001","path":"/abs/path/x.pdf","text":"说明","send":true}
+    {"host":"本机UUID","muse":"attach","id":"att-001","path":"/abs/path/x.pdf","text":"说明","send":true}
 
 - path：绝对路径（必填）。text：可选说明。send：true 则上传后自动发送。
 - 流程：host 读文件 → base64 → 扩展重组 → content.js 构造 File 塞进页面 input。

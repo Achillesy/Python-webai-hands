@@ -34,7 +34,26 @@ if (!adapter) {
   console.log('[webai-hands] 当前站点无适配器：' + location.hostname + '，内容脚本不启用');
   return;
 }
-console.log('[webai-hands] 适配器已选中：' + adapter.name + '（' + location.hostname + '）');
+// 适配器可声明 isActive() 做页面级开关（www.google.com 只有 AI Mode 页生效，
+// 普通搜索页不启用）。SPA 客户端路由不重跑 content script，故此处不直接 return，
+// 由 scan() 每次惰性检查；页面变化后自动生效/失效。
+function adapterActive() {
+  try { return !adapter.isActive || adapter.isActive(); }
+  catch (e) { return false; }
+}
+if (adapterActive()) {
+  console.log('[webai-hands] 适配器已选中：' + adapter.name + '（' + location.hostname + '）');
+} else {
+  console.log('[webai-hands] 适配器已选中：' + adapter.name + '，但当前页面不适用，等待页面变化');
+}
+// 适配器可声明 blockText(el) 自定义块文本提取（默认 el.innerText）。
+// Google AI Mode 的代码块容器首行是语言标签，需跳到 JSON 行。
+function blockTextOf(el) {
+  try {
+    if (adapter.blockText) return adapter.blockText(el) || '';
+  } catch (e) {}
+  return el.innerText || el.textContent || '';
+}
 
 // ---------- 状态 ----------
 var processed = {};
@@ -598,6 +617,7 @@ function trySend() {
 // ---------- 扫描 ----------
 function scan() {
   if (!ready) return;
+  if (!adapterActive()) return;  // 页面级开关（如 google.com 非 AI Mode 页）
   var els;
   try { els = adapter.findBlocks(); } catch (e) {
     console.error('[webai-hands] adapter.findBlocks 抛异常：', e);
@@ -605,7 +625,7 @@ function scan() {
   }
   if (!els || !els.length) return;
   els.forEach(function (el) {
-    var text = el.innerText || el.textContent || '';
+    var text = blockTextOf(el);
     var block = parseBlock(text);
     if (!block || processed[block.id] || inFlight[block.id]) return;
     if (inWarmup() || baselineIds[block.id] || PLACEHOLDER_IDS[block.id]) {
@@ -634,7 +654,7 @@ function scan() {
       delete stableTimers[fp];
       if (genAtSchedule !== gen) return;  // 已被新一代作废，不转发
       if (userAborted || processed[block.id] || inFlight[block.id]) return;
-      var again = parseBlock(el.innerText || el.textContent || '');
+      var again = parseBlock(blockTextOf(el));
       if (!again) return;
       // M4 严格点名门控（exec/probe/attach 三路统一）
       var gate = checkHostGate(again);

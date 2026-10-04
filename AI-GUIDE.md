@@ -82,7 +82,7 @@ class/父元素/HTML 片段（前 200 字），最多前 10 个。
 | Muse | 无已知类型限制（实测 txt/zip/rar/exe/7z 可传，10MB 通过） |
 | Gemini | 文档上传 input 有 accept 白名单（约 150 种：文档/数据/代码/表格类，含 zip；图片走 image/*）。input 需点开「上传和工具」菜单才渲染，适配器自动处理。实测 txt/zip 可作为附件接受 |
 | ChatGPT | 通用文件入口 input#upload-files（无 accept，不限类型）。免费版有上传额度，额度用完站点直接拒收（与类型无关）；zip 是否接受因探测时额度未恢复未能验证 |
-| Google AI Mode | 上传入口「添加文件和工具」→「添加文件」，input accept 为空（无类型预检）。input 需点开菜单才渲染，适配器自动处理。后端实际收哪些类型未经端到端实测 |
+| Google AI Mode | 上传入口「添加文件和工具」→「添加文件」，input accept 为空（无类型预检）。input 需点开菜单才渲染，适配器自动处理。后端实际收哪些类型未经端到端实测。**注：适配器代码保留（adapters/aimode.js），但 manifest matches 已移除 www.google.com，当前未启用；重启用只需加回该条 matches** |
 
 ## 4. 安全边界（必须遵守）
 

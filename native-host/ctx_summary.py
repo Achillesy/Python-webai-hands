@@ -7,7 +7,7 @@ def run(msg, history):
     items = sorted(history.items(), key=lambda kv: kv[1].get("ts", 0), reverse=True)[:30]
     lines = ["# webai-hands session summary", "", "generated: " + time.strftime("%Y-%m-%d %H:%M:%S")]
     for k, v in items:
-        out = (v.get("stdout") or "").strip().replace(chr(10), " ")[:80]
+        out = (v.get("stdout_head") or v.get("stdout") or "").strip().replace(chr(10), " ")[:80]
         lines.append("- %s  %s  %s" % (k, "ok" if v.get("ok") else "fail", out))
     d = os.path.join(os.path.expanduser("~"), ".webai-hands")
     os.makedirs(d, exist_ok=True)

@@ -25,6 +25,11 @@ LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host.log")
 DEFAULT_TIMEOUT = 120  # 秒；M1 先给保守值，截断/超时策略 M3 定型
 HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exec_history.json")
 HISTORY_LIMIT = 500  # 最多保留最近 500 条 id 的执行记录
+HISTORY_MAX_BYTES = 1 * 1024 * 1024  # 文件总大小上限 1MB（条数之外的双保险）
+STDOUT_HEAD_LEN = 500  # 每条只保留输出前 500 字符（ctx_summary 只用前 80）
+# 瘦身说明（2026-10-04）：HISTORY 是幂等去重的键表，不是审计存档。
+# 曾存全量 stdout 导致 22MB 膨胀；现只存元数据 + 输出摘要。全量输出
+# 本来就回填到页面了，页面即记录。UUID 不存（日志在本机，本机隐含）。
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 单文件上限 25MB
 CHUNK_B64 = 500 * 1024  # 每块 base64 字符数（原始 ~375KB，留足 1MB 消息余量）
 FILE_DENY = (
@@ -46,19 +51,46 @@ def log(line):
         pass
 
 
+def slim_entry(key, v):
+    """把一条历史记录瘦身为元数据 + 输出摘要（幂等去重只需要这些）。"""
+    v = v if isinstance(v, dict) else {}
+    return {
+        "id": v.get("id", key),
+        "ok": v.get("ok"),
+        "exit_code": v.get("exit_code"),
+        "duration_ms": v.get("duration_ms", 0),
+        "ts": v.get("ts", 0),
+        "session": v.get("session", ""),
+        "cmd": str(v.get("cmd", ""))[:200],
+        # 兼容老版本的全量 stdout 字段，取前 500 字符
+        "stdout_head": str(v.get("stdout_head") or v.get("stdout") or "")[:STDOUT_HEAD_LEN],
+    }
+
+
 def load_history():
     try:
         with open(HISTORY_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            raw = json.load(f)
     except (OSError, json.JSONDecodeError):
+        return {}
+    # 迁移：老版本存了全量 stdout，加载时统一瘦身
+    try:
+        return {k: slim_entry(k, v) for k, v in raw.items()}
+    except (AttributeError, TypeError):
         return {}
 
 
 def save_history(hist):
     try:
-        items = sorted(hist.items(), key=lambda kv: kv[1].get("ts", 0), reverse=True)[:HISTORY_LIMIT]
+        items = sorted(hist.items(), key=lambda kv: kv[1].get("ts", 0), reverse=True)
+        items = items[:HISTORY_LIMIT]
+        blob = json.dumps(dict(items), ensure_ascii=False, indent=2)
+        # 总大小上限：瘦身后一般碰不到，碰到就从最旧的开始砍
+        while len(blob.encode("utf-8")) > HISTORY_MAX_BYTES and len(items) > 1:
+            items = items[:-1]
+            blob = json.dumps(dict(items), ensure_ascii=False, indent=2)
         with open(HISTORY_PATH, "w", encoding="utf-8") as f:
-            json.dump(dict(items), f, ensure_ascii=False, indent=2)
+            f.write(blob)
     except OSError:
         pass
 
@@ -124,10 +156,21 @@ def run_exec(msg):
     rid = msg.get("id")
     if rid in HISTORY:
         log("duplicate id=%s, returning cached" % rid)
-        cached = dict(HISTORY[rid])
-        cached["type"] = "result"
-        cached["duplicate"] = True
-        return cached
+        h = HISTORY[rid]
+        # 去重命中：如实返回"这是缓存"，输出只有摘要（全量当时已回填页面）
+        return {
+            "type": "result",
+            "id": rid,
+            "hostname": socket.gethostname(),
+            "machine_id": MACHINE_ID,
+            "ok": h.get("ok"),
+            "exit_code": h.get("exit_code"),
+            "stdout": (h.get("stdout_head") or "") + "\n…（去重命中：该 id 已执行过，仅保留输出摘要）",
+            "stderr": "",
+            "duration_ms": h.get("duration_ms", 0),
+            "duplicate": True,
+            "ts": h.get("ts", 0),
+        }
     cmd = msg.get("cmd", "")
     if cmd.strip() == "__diag__":
         return run_diag(msg)
@@ -174,7 +217,8 @@ def run_exec(msg):
     stdout = decode_output(box.get("out"))
     stderr = decode_output(box.get("err"))
     duration_ms = int((time.time() - started) * 1000)
-    log("exec id=%s exit=%s ms=%s cmd=%r" % (msg.get("id"), exit_code, duration_ms, cmd[:200]))
+    log("exec id=%s session=%s exit=%s ms=%s cmd=%r" % (
+        msg.get("id"), msg.get("session") or "-", exit_code, duration_ms, cmd[:200]))
     res = {
         "type": "result",
         "id": msg.get("id"),
@@ -189,7 +233,17 @@ def run_exec(msg):
     if error:
         res["error"] = error
     res["ts"] = int(time.time())
-    HISTORY[rid] = dict(res)
+    # 瘦身入库：只存元数据 + 输出摘要 + session（UUID 不存，本机隐含）
+    HISTORY[rid] = {
+        "id": rid,
+        "ok": res["ok"],
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+        "ts": res["ts"],
+        "session": msg.get("session") or "",
+        "cmd": cmd[:200],
+        "stdout_head": stdout[:STDOUT_HEAD_LEN],
+    }
     save_history(HISTORY)
     return res
 
@@ -251,7 +305,8 @@ def run_diag(msg):
             with open(LOG_PATH, encoding="utf-8", errors="replace") as f:
                 tail = f.readlines()[-20:]
         recent = sorted(HISTORY.items(), key=lambda kv: kv[1].get("ts", 0), reverse=True)[:10]
-        recent_list = [{"id": k, "ok": v.get("ok"), "ts": v.get("ts")} for k, v in recent]
+        recent_list = [{"id": k, "ok": v.get("ok"), "ts": v.get("ts"),
+                        "session": v.get("session", "")} for k, v in recent]
         return {
             "type": "result",
             "id": msg.get("id"),

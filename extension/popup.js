@@ -1,5 +1,5 @@
 // webai-hands 扩展面板（popup）
-// 两个控件：测通桥（直连本地 host 敲一记 ping）、自动发送开关。
+// 两个控件：测通桥（经 background 的 native 端口敲一记 ping，测的是真链路）、自动发送开关。
 
 var statusEl = document.getElementById('status');
 var autoEl = document.getElementById('autosend');
@@ -15,40 +15,31 @@ autoEl.addEventListener('change', function () {
 
 document.getElementById('ping').addEventListener('click', function () {
   statusEl.textContent = '连接中…';
-  var port;
-  try {
-    port = chrome.runtime.connectNative('com.webai.hands');
-  } catch (e) {
-    statusEl.textContent = '连接失败：' + e.message;
-    return;
-  }
   var done = false;
+  // background 侧 10 秒超时；这里 15 秒兜底，让 background 的结构化报错先赢
   var timer = setTimeout(function () {
     if (done) return;
     done = true;
-    statusEl.textContent = '无回音（host 没起来？）';
-    try { port.disconnect(); } catch (e) {}
-  }, 4000);
-  port.onMessage.addListener(function (msg) {
-    if (msg && msg.type === 'pong' && !done) {
-      done = true;
-      clearTimeout(timer);
-      statusEl.textContent = '已连接 ' + (msg.hostname || '');
-      try { port.disconnect(); } catch (e) {}
-    }
-  });
-  port.onDisconnect.addListener(function () {
+    statusEl.textContent = '无回音（后台 15 秒无响应）';
+  }, 15000);
+  function finish(text) {
     if (done) return;
     done = true;
     clearTimeout(timer);
-    var err = chrome.runtime.lastError;
-    statusEl.textContent = '连接失败：' + (err ? err.message : '未知');
-  });
+    statusEl.textContent = text;
+  }
   try {
-    port.postMessage({ type: 'ping', id: 'popup-' + Date.now() });
+    // 办法二：不直连 native host，问 background 要一次真链路 ping
+    chrome.runtime.sendMessage({ type: 'ping_test' }, function (res) {
+      if (chrome.runtime.lastError) {
+        finish('连接失败：' + chrome.runtime.lastError.message);
+        return;
+      }
+      if (res && res.ok) finish('已连接 ' + (res.hostname || ''));
+      else finish('连接失败：' + ((res && res.error) || '未知'));
+    });
   } catch (e) {
-    clearTimeout(timer);
-    statusEl.textContent = '发送失败：' + e.message;
+    finish('发送失败：' + e.message);
   }
 });
 

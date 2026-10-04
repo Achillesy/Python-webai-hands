@@ -13,6 +13,7 @@ const PLATFORM_KEY = "mh_platform";
 let nativePort = null;
 const pending = new Map(); // exec id -> {port, session, gen}
 const fileBuf = new Map(); // read_file id -> 累积的 file_chunk
+const pingTests = new Map(); // ping_test id -> {timer, sendResponse}（办法二：popup 测通桥）
 
 // ---------- Layer 1 调度器 ----------
 // host 全局顺序执行；background 做内存 FIFO，一次只发一个给 host。
@@ -141,6 +142,16 @@ function ensureNativePort() {
         if (msg.platform) obj[PLATFORM_KEY] = msg.platform;
         if (Object.keys(obj).length) chrome.storage.local.set(obj);
       } catch (e) {}
+      // 办法二：popup"测通桥"的 pong 按 id 在这里认领（pingtest- 前缀）。
+      // 测的是命令真正走的链路 —— 此前 popup 直连自己的端口，"已连接"可能是假绿
+      // （2026-10-04 真站教训：popup 显示已连接，background 端口一次都没建过）。
+      var pt = pingTests.get(msg.id);
+      if (pt) {
+        pingTests.delete(msg.id);
+        clearTimeout(pt.timer);
+        try { pt.sendResponse({ ok: true, hostname: msg.hostname,
+          machine_id: msg.machine_id, platform: msg.platform }); } catch (e) {}
+      }
       return;
     }
     if (msg.type === "file_chunk") {
@@ -212,6 +223,12 @@ function ensureNativePort() {
     }
     pending.clear();
     fileBuf.clear();
+    // 办法二：host 断开时，未完成的测通桥也立即报错，不让它等到 10 秒超时
+    for (const [pid, pt] of pingTests) {
+      clearTimeout(pt.timer);
+      try { pt.sendResponse({ ok: false, error: "本地 host 连接已断开" }); } catch (e) {}
+    }
+    pingTests.clear();
     // 排队未发的也一并报错，不静默吞掉
     while (schedQueue.length) {
       const it = schedQueue.shift();
@@ -223,8 +240,8 @@ function ensureNativePort() {
     }
   });
   // §6.7 前置条件：建连即 ping，pong 带回 hostname 并缓存到 storage。
-  // 不能依赖用户点图标 —— manifest 配了 default_popup，onClicked 不会触发；
-  // popup 的"测通桥"走自己的直连端口，pong 不经过这里。
+  // 不能依赖用户点图标 —— manifest 配了 default_popup，onClicked 不会触发。
+  // 办法二：popup"测通桥"也不再直连，统一走这里的端口（测真链路）。
   try { nativePort.postMessage({ type: "ping", id: "__init__" + Date.now() }); } catch (e) {}
   return nativePort;
 }
@@ -275,4 +292,24 @@ chrome.runtime.onConnect.addListener((pagePort) => {
     }
     portGen.delete(pagePort);
   });
+});
+// ---------- 办法二：popup"测通桥"走 background 的 native 端口 ----------
+// popup 发 {type:"ping_test"}，这里经 ensureNativePort() 发 ping，pong 按 id
+// 认领后回给 popup。测的是命令真正走的链路，不是平行通道。
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== "ping_test") return false;
+  var pid = "pingtest-" + Date.now() + "-" + Math.floor(Math.random() * 1e6);
+  var timer = setTimeout(function () {
+    pingTests.delete(pid);
+    try { sendResponse({ ok: false, error: "host 无回音（10 秒超时）" }); } catch (e) {}
+  }, 10000);
+  try {
+    pingTests.set(pid, { timer: timer, sendResponse: sendResponse });
+    ensureNativePort().postMessage({ type: "ping", id: pid });
+  } catch (e) {
+    pingTests.delete(pid);
+    clearTimeout(timer);
+    try { sendResponse({ ok: false, error: "连接 host 失败：" + e.message }); } catch (ee) {}
+  }
+  return true; // 异步回包，保持消息通道
 });

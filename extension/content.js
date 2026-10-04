@@ -63,6 +63,11 @@ var warmupQuietTimer = null;
 var userAborted = false;
 var selfActing = false;
 
+// ---------- 会话与代数（Layer 1 调度 / 优雅停止） ----------
+// SESSION：本页面一次加载的逻辑会话 id；gen：代数，点停止即 +1，旧代全部过期。
+var SESSION = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+var gen = 0;
+
 // 预热结束条件（任一满足即结束）：
 //  1. DOM 静默 WARMUP_QUIET_MS（且距启动已过 WARMUP_MIN_MS）；
 //  2. 兜底：启动 WARMUP_MAX_MS 后第一次 scan 时强制结束。
@@ -95,6 +100,8 @@ function abortChain(reason) {
   if (userAborted) return;
   userAborted = true;
   console.log('[webai-hands] 链中止：' + reason);
+  var nTimers = Object.keys(stableTimers).length;
+  var nFlight = Object.keys(inFlight).length;
   Object.keys(stableTimers).forEach(function (k) { clearTimeout(stableTimers[k]); delete stableTimers[k]; });
   Object.keys(inFlight).forEach(function (id) { delete inFlight[id]; });
   Object.keys(cmdById).forEach(function (id) { delete cmdById[id]; });
@@ -108,6 +115,34 @@ function abortChain(reason) {
   pendingResults = [];
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   flushHardDeadline = 0;
+  // 代数 +1：旧代命令/结果全部过期；通知 background 丢弃本会话排队项
+  gen++;
+  try { getPort().postMessage({ type: 'stop', session: SESSION, gen: gen }); } catch (e) {}
+  // 有实际作废才代发通知：纯文本停止（无命令在跑）不打扰
+  if (nTimers + nFlight > 0) sendCancelNotice(gen, nTimers, nFlight);
+}
+
+// 停止后代发一条用户消息（真发送）：既给用户可见确认，也让 AI 停手不再发新块。
+// 不走 mh_auto_send 开关 —— 用户亲手点的停止，通知必发；发送失败退化为只填不发。
+function sendCancelNotice(curGen, nTimers, nFlight) {
+  var text = '⏹ [webai-hands 代发] 用户点击了停止按钮：第 ' + curGen + ' 代命令已全部作废' +
+    '（取消 ' + nTimers + ' 个待发，' + nFlight + ' 个执行中结果不再回填）。' +
+    '请暂停当前任务，等候用户下一步指令，不要发送新的命令块。';
+  var ok = false;
+  try { ok = adapter.fillResult(text); } catch (e) { ok = false; }
+  if (ok) {
+    console.log('[webai-hands] 停止通知已填回，500ms 后发送');
+    setTimeout(trySend, 500);
+  } else {
+    console.log('[webai-hands] 停止通知填回失败，仅记录不打扰');
+  }
+}
+
+// 只填不发（忙拒绝等通知用，不触发自动发送）
+function fillOnly(text) {
+  var ok = false;
+  try { ok = adapter.fillResult(text); } catch (e) { ok = false; }
+  if (!ok) console.log('[webai-hands] 通知填回失败：', String(text).slice(0, 200));
 }
 
 // ---------- 哨兵解析 ----------
@@ -225,6 +260,12 @@ function getPort() {
   pagePort = chrome.runtime.connect({ name: 'webai-hands' });
   pagePort.onMessage.addListener(function (msg) {
     if (!msg) return;
+    // 代数门控：过期代的消息（晚到的结果/错误/文件/忙拒绝）一律丢弃，治"穿透填回"
+    if (msg.gen !== undefined && msg.gen !== gen) {
+      console.log('[webai-hands] 丢弃过期代消息：' + msg.type + ' id=' + (msg.id || '-') +
+                  ' 代=' + msg.gen + ' 当前=' + gen);
+      return;
+    }
     if (msg.type === 'file') {
       onFileArrived(msg);
     } else if (msg.type === 'result') {
@@ -238,6 +279,14 @@ function getPort() {
       delete cmdById[msg.id];
       pendingResults.push('' + (msg.error || '未知错误'));
       scheduleFlush();
+    } else if (msg.type === 'busy' && msg.id) {
+      // 5 秒宽限拒绝：只填不发，告诉用户正在跑什么、被拒的是什么
+      delete inFlight[msg.id];
+      delete cmdById[msg.id];
+      fillOnly('⏳ 本机正忙：`' + String(msg.running_cmd || '').slice(0, 120) +
+               '` 已运行 ' + (msg.running_for_s || 0) + 's；' +
+               '你的命令 `' + String(msg.rejected_cmd || '').slice(0, 120) +
+               '` 未执行（5 秒宽限已过）。可稍后手动重发。');
     }
     // progress 心跳帧只是保活长连接，不打扰页面
   });
@@ -283,6 +332,8 @@ function execBlock(block) {
     getPort().postMessage({
       type: 'exec',
       id: block.id,
+      session: SESSION,
+      gen: gen,
       cmd: block.cmd,
       shell: block.shell,
       timeout: block.timeout
@@ -323,7 +374,8 @@ function attachBlock(block) {
   attachMeta[block.id] = { text: block.text || null, send: !!block.send };
   console.log('[webai-hands] attach ' + block.id + ' 请求文件 ' + block.path);
   try {
-    getPort().postMessage({ type: 'read_file', id: block.id, path: block.path });
+    getPort().postMessage({ type: 'read_file', id: block.id, path: block.path,
+                            session: SESSION, gen: gen });
   } catch (e) {
     delete inFlight[block.id]; delete attachMeta[block.id];
     fillBack('[attach ' + block.id + '] 请求文件失败：' + e.message);
@@ -508,8 +560,10 @@ function scan() {
       console.log('[webai-hands] 标记块 ' + block.id + ' 出现了');
     }
     var fp = block.id + '|' + fingerprint(text);
+    var genAtSchedule = gen;
     clearTimeout(stableTimers[fp]);
     stableTimers[fp] = setTimeout(function () {
+      if (genAtSchedule !== gen) return;  // 已被新一代作废，不转发
       if (userAborted || processed[block.id] || inFlight[block.id]) return;
       var again = parseBlock(el.innerText || el.textContent || '');
       if (!again) return;

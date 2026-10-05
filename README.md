@@ -1,6 +1,6 @@
 ﻿# webai-hands
 
-[中文](README.zh-CN.md)
+[中文](README_zh.md)
 
 > Give web AI a pair of hands: type in a chat page, your computer does the work.
 

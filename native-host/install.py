@@ -25,7 +25,13 @@ EXTENSION_IDS = [
     "pboakanoekehbongkmaeianbkebpfahl",  # Chrome Web Store build
 ]
 STORE_URL = "https://chromewebstore.google.com/detail/pboakanoekehbongkmaeianbkebpfahl"
-HERE = os.path.dirname(os.path.abspath(__file__))
+try:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # __file__ is undefined when run via exec() from a string or piped
+    # through stdin (the documented one-line installs). That always means
+    # standalone mode: fetch the host files from the network.
+    HERE = None
 INSTALL_DIR = os.path.expanduser("~/.webai-hands")
 HOST_FILES = ["host.py", "host.sh", "host.bat", "ctx_summary.py"]
 # Where to fetch the host program when install.py is downloaded standalone
@@ -60,7 +66,7 @@ def fetch_files():
     # - Source mode: host files sit next to install.py (git checkout) -> copy.
     # - Standalone mode: install.py was downloaded alone (one-line install)
     #   -> fetch the host files from GitHub.
-    if all(os.path.exists(os.path.join(HERE, n)) for n in HOST_FILES):
+    if HERE and all(os.path.exists(os.path.join(HERE, n)) for n in HOST_FILES):
         for name in HOST_FILES:
             shutil.copy2(os.path.join(HERE, name), os.path.join(INSTALL_DIR, name))
         print("Copied host files from %s" % HERE)

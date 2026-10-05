@@ -1,44 +1,44 @@
-# Chrome Web Store 提交清单
+# Chrome Web Store submission checklist
 
-## 已就绪（仓库里）
+## Ready (in the repo)
 
-- [x] `store/webai-hands-store-0.4.0.zip` —— 上架包（`bash store/build.sh` 可重打；
-      已剥离 dev `key`，首次上传商店会分配新扩展 ID）
-- [x] 图标 16/48/128（`extension/icons/`，manifest 已引用）
-- [x] 商品描述 `store/listing-en.txt` / `store/listing-zh.txt`
-- [x] LICENSE（noncommercial）、隐私说明（见下）
+- [x] `store/webai-hands-store-0.4.0.zip` — release package (`bash store/build.sh` rebuilds it;
+      dev `key` stripped; first store upload assigns a new extension ID)
+- [x] Icons 16/48/128 (`extension/icons/`, referenced from the manifest)
+- [x] Store descriptions `store/listing-en.txt` / `store/listing-zh.txt`
+- [x] LICENSE (noncommercial), privacy notes (see below)
 
-## 需要你在开发者后台亲手做的
+## To do by hand in the developer dashboard
 
-1. **截图**（必须，至少 1 张；建议 3–5 张）：
-   - 1280×800 或 640×400
-   - 建议内容：① 在 DeepSeek 对话里发命令块→结果回填；② attach 附件上传；
-     ③ 扩展 popup 面板；④ Blender 被驱动的画面
-   - 在你 M1 的 Chrome 里实际操作时截（开发者模式加载的版本即可）
-2. **小宣传图**（可选但推荐）：440×280
-3. 进 [Chrome Web Store 开发者后台](https://chrome.google.com/webstore/devconsole) →
-   新增商品 → 上传 zip → 填描述（从 `listing-*.txt` 粘）→ 选类目
-   （建议 Productivity/生产力工具）→ 语言：英语（默认）+ 中文
-4. **隐私问卷**：按以下口径填
-   - 收集用户数据：否（扩展本身不收集、不传输、不存储任何用户数据）
-   - `nativeMessaging` 权限用途：与用户本机安装的开源 host 程序通信，
-     执行用户在聊天中明确下达的命令；通信只走本机 stdio，无网络端口
-   - 远程代码：否（扩展代码全在包内；host 是用户亲手安装的开源程序）
-5. 提交审核（新商品通常几小时到几天）
+1. **Screenshots** (required, at least 1; 3–5 recommended):
+   - 1280×800 or 640×400
+   - Suggested content: 1. send a command block in a DeepSeek chat → result filled back; 2. attach file upload;
+     3. the extension popup panel; 4. Blender being driven
+   - Capture while actually operating it in Chrome on your M1 (a developer-mode loaded build is fine)
+2. **Small promo tile** (optional but recommended): 440×280
+3. Go to the [Chrome Web Store developer dashboard](https://chrome.google.com/webstore/devconsole) →
+   new item → upload zip → fill in the description (paste from `listing-*.txt`) → pick a category
+   (suggest Productivity) → language: English (default) + Chinese
+4. **Privacy questionnaire**: answer as follows
+   - Collects user data: no (the extension itself collects, transmits, and stores no user data)
+   - `nativeMessaging` permission purpose: communicate with the open-source host program the user installed on their own machine,
+     executing commands the user explicitly gave in chat; traffic stays on local stdio, no network ports
+   - Remote code: no (all extension code is inside the package; the host is an open-source program the user installs by hand)
+5. Submit for review (new items usually take a few hours to a few days)
 
-## 上架成功后（必须做，否则 host 连不上）
+## After going live (required, otherwise the host can't connect)
 
-1. 记下商店分配的**新扩展 ID**。
-2. 更新 `native-host/install.py`（及 Windows bat）里的 allowlist/模板，
-   把新 ID 加进去（或替换 dev ID）。
-3. 发版说明里告诉用户：商店版装好后**重跑一遍 install**（host 要认新 ID）。
-4. dev 版（`aaemlgedddakpgkfoakfmkdiiheplgnl`）继续保留给开发者自用，
-   两套 ID 互不干扰。
+1. Note down the **new extension ID** assigned by the store.
+2. Update the allowlist/template in `native-host/install.py` (and the Windows bat),
+   adding the new ID (or replacing the dev ID).
+3. Tell users in the release notes: after installing the store version, **re-run install** (the host must recognize the new ID).
+4. Keep the dev build (`aaemlgedddakpgkfoakfmkdiiheplgnl`) for developers' own use;
+   the two IDs don't interfere with each other.
 
-## 隐私说明（供后台问卷/商品页引用）
+## Privacy notes (for the dashboard questionnaire / store page)
 
-> webai-hands 扩展本身不收集、不传输、不存储任何用户数据，不含广告、
-> 不含追踪。`nativeMessaging` 权限仅用于与用户亲手安装在本机的开源
-> host 程序通信（Chrome 官方 Native Messaging，本机 stdio，无网络端口），
-> 执行用户在 AI 对话中明确下达的命令。文件上传需 AI 在对话中索取，
-> 敏感路径（SSH 密钥、浏览器 cookie、.env 等）一律拒绝，单文件上限 25MB。
+> The webai-hands extension itself collects, transmits, and stores no user data; no ads,
+> no tracking. The `nativeMessaging` permission is only used to communicate with the open-source
+> host program the user installed by hand on their own machine (Chrome's official Native Messaging, local stdio, no network ports),
+> executing commands the user explicitly gave in an AI chat. File uploads require the AI to ask for them in the chat;
+> sensitive paths (SSH keys, browser cookies, .env, etc.) are always refused; single-file cap 25MB.

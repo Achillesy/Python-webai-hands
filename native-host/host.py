@@ -34,15 +34,17 @@ LOG_PATH = os.path.join(LOG_DIR, "host.log")
 DEFAULT_TIMEOUT = 120  # seconds; conservative for now
 HOST_CWD = os.path.expanduser("~")  # fixed cwd: predictable, idempotent
 HISTORY_PATH = os.path.join(LOG_DIR, "exec_history.json")
-HISTORY_LIMIT = 500  # 最多保留最近 500 条 id 的执行记录
-HISTORY_MAX_BYTES = 1 * 1024 * 1024  # 文件总大小上限 1MB（条数之外的双保险）
-STDOUT_HEAD_LEN = 500  # 每条只保留输出前 500 字符（ctx_summary 只用前 80）
-# 瘦身说明（2026-10-04）：HISTORY 是幂等去重的键表，不是审计存档。
-# 曾存全量 stdout 导致 22MB 膨胀；现只存元数据 + 输出摘要。全量输出
-# 本来就回填到页面了，页面即记录。UUID 不存（日志在本机，本机隐含）。
-MAX_FILE_SIZE = 25 * 1024 * 1024  # 单文件上限 25MB
-MAX_CMD_BYTES = 512 * 1024  # 单条命令上限 512KB（Chrome 原生消息单条硬上限 1MB，留足余量；与扩展侧一致）
-CHUNK_B64 = 500 * 1024  # 每块 base64 字符数（原始 ~375KB，留足 1MB 消息余量）
+HISTORY_LIMIT = 500  # keep execution records for the most recent 500 ids
+HISTORY_MAX_BYTES = 1 * 1024 * 1024  # total file size cap 1MB (second safety net beyond the count limit)
+STDOUT_HEAD_LEN = 500  # keep only the first 500 chars of output per entry (ctx_summary uses the first 80)
+# Slimming note (2026-10-04): HISTORY is a key table for idempotent
+# dedup, not an audit archive. Storing full stdout once bloated it to
+# 22MB; now only metadata + output summary are kept. Full output is
+# already filled back into the page — the page is the record. UUIDs are
+# not stored (the log lives on this machine, so the machine is implied).
+MAX_FILE_SIZE = 25 * 1024 * 1024  # single-file cap 25MB
+MAX_CMD_BYTES = 512 * 1024  # single-command cap 512KB (Chrome native message hard limit is 1MB; keep margin; matches the extension side)
+CHUNK_B64 = 500 * 1024  # base64 chars per chunk (raw ~375KB; keep margin under the 1MB message limit)
 FILE_DENY = (
     "/.ssh/", "/.aws/", "/.gnupg/", "/.config/gcloud/",
     "id_rsa", "id_ed25519", "id_ecdsa", ".pem", ".key", ".p12",
@@ -71,7 +73,7 @@ def log(line):
 
 
 def slim_entry(key, v):
-    """把一条历史记录瘦身为元数据 + 输出摘要（幂等去重只需要这些）。"""
+    """Slim one history entry down to metadata + output summary (all idempotent dedup needs)."""
     v = v if isinstance(v, dict) else {}
     return {
         "id": v.get("id", key),
@@ -81,7 +83,7 @@ def slim_entry(key, v):
         "ts": v.get("ts", 0),
         "session": v.get("session", ""),
         "cmd": str(v.get("cmd", ""))[:200],
-        # 兼容老版本的全量 stdout 字段，取前 500 字符
+        # tolerate the old full-stdout field; take the first 500 chars
         "stdout_head": str(v.get("stdout_head") or v.get("stdout") or "")[:STDOUT_HEAD_LEN],
     }
 
@@ -92,7 +94,7 @@ def load_history():
             raw = json.load(f)
     except (OSError, json.JSONDecodeError):
         return {}
-    # 迁移：老版本存了全量 stdout，加载时统一瘦身
+    # migration: old versions stored full stdout; slim on load
     try:
         return {k: slim_entry(k, v) for k, v in raw.items()}
     except (AttributeError, TypeError):
@@ -104,7 +106,7 @@ def save_history(hist):
         items = sorted(hist.items(), key=lambda kv: kv[1].get("ts", 0), reverse=True)
         items = items[:HISTORY_LIMIT]
         blob = json.dumps(dict(items), ensure_ascii=False, indent=2)
-        # 总大小上限：瘦身后一般碰不到，碰到就从最旧的开始砍
+        # total size cap: rarely hit after slimming; drop oldest first when hit
         while len(blob.encode("utf-8")) > HISTORY_MAX_BYTES and len(items) > 1:
             items = items[:-1]
             blob = json.dumps(dict(items), ensure_ascii=False, indent=2)
@@ -175,7 +177,7 @@ def run_exec(msg):
     if rid in HISTORY:
         log("duplicate id=%s, returning cached" % rid)
         h = HISTORY[rid]
-        # 去重命中：如实返回"这是缓存"，输出只有摘要（全量当时已回填页面）
+        # dedup hit: honestly report "this is cached"; output is summary only (full output was filled back into the page at the time)
         return {
             "type": "result",
             "id": rid,
@@ -183,20 +185,20 @@ def run_exec(msg):
             "machine_id": MACHINE_ID,
             "ok": h.get("ok"),
             "exit_code": h.get("exit_code"),
-            "stdout": (h.get("stdout_head") or "") + "\n…（去重命中：该 id 已执行过，仅保留输出摘要）",
+            "stdout": (h.get("stdout_head") or "") + "\n…(dedup hit: this id was already executed; only the output summary is kept)",
             "stderr": "",
             "duration_ms": h.get("duration_ms", 0),
             "duplicate": True,
             "ts": h.get("ts", 0),
         }
     cmd = msg.get("cmd", "")
-    # 纵深防御：扩展侧已拒收超限块，这里再拦一道（直连 host 的非常规路径）
+    # defense in depth: the extension already rejects oversized blocks; block again here (unusual path of talking to the host directly)
     if len(cmd.encode("utf-8", "ignore")) > MAX_CMD_BYTES:
         log("exec id=%s oversize cmd, rejected" % rid)
         return {
             "type": "error",
             "id": rid,
-            "error": "命令过大（单条上限 512KB），已拒收。请拆成多个小块分次执行，或走 attach 通道传大文件。",
+            "error": "Command too large (512KB per-command limit); rejected. Split it into smaller chunks, or send large files via the attach channel.",
         }
     if cmd.strip() == "__diag__":
         return run_diag(msg)
@@ -232,7 +234,7 @@ def run_exec(msg):
             break
         t.join(min(20, remaining))
         if t.is_alive():
-            # 约每 20 秒报一次活，防止上层长连接被当闲置掐断
+            # heartbeat roughly every 20s so the upper long-lived connection isn't killed as idle
             send_message(
                 {
                     "type": "progress",
@@ -260,7 +262,7 @@ def run_exec(msg):
     if error:
         res["error"] = error
     res["ts"] = int(time.time())
-    # 瘦身入库：只存元数据 + 输出摘要 + session（UUID 不存，本机隐含）
+    # slimmed store: metadata + output summary + session only (no UUID; the machine is implied)
     HISTORY[rid] = {
         "id": rid,
         "ok": res["ok"],
@@ -276,34 +278,34 @@ def run_exec(msg):
 
 
 def run_read_file(msg):
-    """读本机文件，base64 分块回传。安全拒绝名单 + 大小上限。"""
+    """Read a local file, return it base64-encoded in chunks. Deny-list + size cap."""
     rid = msg.get("id")
     path = msg.get("path", "")
     if not path:
-        return {"type": "error", "id": rid, "error": "缺少 path"}
+        return {"type": "error", "id": rid, "error": "missing path"}
     try:
         real = os.path.realpath(os.path.expanduser(path))
     except Exception as e:
-        return {"type": "error", "id": rid, "error": "路径解析失败: %r" % (e,)}
+        return {"type": "error", "id": rid, "error": "path resolution failed: %r" % (e,)}
     if not os.path.isfile(real):
-        return {"type": "error", "id": rid, "error": "文件不存在: %s" % real}
+        return {"type": "error", "id": rid, "error": "file not found: %s" % real}
     low = real.lower()
     for pat in FILE_DENY:
         if pat in low:
             log("read_file DENY id=%s path=%r pattern=%s" % (rid, real, pat))
-            return {"type": "error", "id": rid, "error": "拒绝读取敏感路径"}
+            return {"type": "error", "id": rid, "error": "refusing to read sensitive path"}
     try:
         size = os.path.getsize(real)
     except OSError as e:
-        return {"type": "error", "id": rid, "error": "无法读取大小: %r" % (e,)}
+        return {"type": "error", "id": rid, "error": "cannot read size: %r" % (e,)}
     if size > MAX_FILE_SIZE:
         return {"type": "error", "id": rid,
-                "error": "文件过大 %d 字节（上限 %d）" % (size, MAX_FILE_SIZE)}
+                "error": "file too large: %d bytes (cap %d)" % (size, MAX_FILE_SIZE)}
     try:
         with open(real, "rb") as f:
             raw = f.read()
     except OSError as e:
-        return {"type": "error", "id": rid, "error": "读取失败: %r" % (e,)}
+        return {"type": "error", "id": rid, "error": "read failed: %r" % (e,)}
     b64 = base64.b64encode(raw).decode("ascii")
     name = os.path.basename(real)
     mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
@@ -397,7 +399,7 @@ def main():
                     send_message(item)
             else:
                 send_message(res)
-        except Exception as e:  # 单条消息出错不能把 host 带走
+        except Exception as e:  # one bad message must not take the host down
             log("handle error: %r" % (e,))
             try:
                 send_message({"type": "error", "id": msg.get("id"), "error": str(e)})

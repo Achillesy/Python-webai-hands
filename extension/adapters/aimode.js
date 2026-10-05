@@ -1,27 +1,27 @@
-// webai-hands 适配器：Google AI Mode（www.google.com）
+// webai-hands adapter: Google AI Mode (www.google.com)
 //
-// DOM 依据：2026-10-04 经 VM 浏览器登录态实测采集。
-// - hostname 为 www.google.com，整站匹配，故加 isActive() 页面级开关：
-//   只有出现 AI Mode 输入框（textarea[aria-label="尽情提问"]）的页面才生效，
-//   普通 Google 搜索页不启用。SPA 客户端路由由 content.js 惰性检查兜底。
-// - 代码块：灰色圆角容器（顶部语言标签 + 代码区 + 底部"请谨慎使用此代码。"+复制按钮）。
-//   硬锚点为复制按钮 button[aria-label="将代码文本复制到剪贴板。"]（data-sfc-cp 为空值属性）；
-//   行内代码无此按钮，可区分。pre/code 的标签名未能隔离（工具限制），故 findBlocks
-//   以复制按钮为锚向上找容器，用"内容自验证"定位：取离按钮最近的、其文本中含合法块
-//   JSON 行的祖先（8 层封顶），结构变化也不怕。
-// - blockText：容器首行是语言标签（"python"/"bash"，可能 aria-hidden），直接取 innerText
-//   会让 parseBlock 把语言标签当 JSON 解析而丢弃；此处跳到第一个以 { 开头的行。
-// - 输入框：textarea[aria-label="尽情提问"]，maxlength=8192。
-// - 发送按钮：button[aria-label="发送"][data-xid="input-plate-send-button"]，
-//   仅输入框非空时渲染（先填后发，trySend 有 300-500ms 延迟，足够渲染）。
-// - 停止按钮：未捕获（流式窗口错过），暂不实现；content.js 会静默跳过（同 muse.js）。
-// - 文件上传：入口 button[aria-label="添加文件和工具"] → 点开展开 role=menu，
-//   "添加文件" 的 input[type=file]（accept=""，hidden，multiple）嵌在 menuitem 内，
-//   点开菜单后才渲染；走异步 Promise（content.js 用 Promise.resolve 兼容）。
-//   注意："添加图片" 的 input accept 限图片类型，本适配器只取 accept="" 的"添加文件"。
-//   accept 为空意味着无类型预检；Google 后端是否真收各类文件未经实测（未点发送）。
-// - SPA：发送消息触发整页导航（content 重跑）；"新话题"为客户端路由。
-// - 限制：仅匹配 www.google.com（实测值）；各国别域名（google.com.hk 等）未覆盖。
+// DOM basis: captured via logged-in VM browser on 2026-10-04.
+// - hostname is www.google.com with whole-site matching, hence the isActive() page-level gate:
+//   only active on pages showing the AI Mode input (textarea[aria-label="尽情提问"]),
+//   plain Google search pages stay off. SPA client-side routing is covered by content.js lazy checks.
+// - Code blocks: gray rounded container (top language label + code area + bottom "请谨慎使用此代码。" + copy button).
+//   hard anchor is the copy button button[aria-label="将代码文本复制到剪贴板。"] (data-sfc-cp is a valueless attribute);
+//   inline code lacks this button, so they're distinguishable. pre/code tag names couldn't isolate (tooling limit), so findBlocks
+//   walks up from the copy button to find the container, using "content self-verification":
+//   takes the nearest ancestor whose text holds a valid block JSON line (8 levels max); robust against structural changes.
+// - blockText: the container's first line is a language label ("python"/"bash", possibly aria-hidden); taking innerText
+//   directly would make parseBlock try the label as JSON and discard it; here we jump to the first line starting with {.
+// - Input: textarea[aria-label="尽情提问"], maxlength=8192.
+// - Send button: button[aria-label="发送"][data-xid="input-plate-send-button"],
+//   only rendered when the input is non-empty (fill-then-send; trySend's 300-500ms delay is enough for it to render).
+// - Stop button: not captured (missed the streaming window); not implemented for now; content.js silently skips (same as muse.js).
+// - File upload: entry button[aria-label="添加文件和工具"] → click opens role=menu,
+//   the "添加文件" input[type=file] (accept="", hidden, multiple) nested inside a menuitem,
+//   rendered only after opening the menu; async Promise flow (content.js bridges via Promise.resolve).
+//   note: the "添加图片" input's accept is limited to image types; this adapter only takes "添加文件" with accept="".
+//   empty accept means no type pre-check; whether Google's backend truly accepts all file types is unverified (send never clicked).
+// - SPA: sending a message triggers full-page navigation (content script re-runs); "新话题" is client-side routing.
+// - Limitation: only matches www.google.com (verified value); country domains (google.com.hk etc.) not covered.
 (function () {
   'use strict';
 
@@ -30,7 +30,7 @@
   var SEND_SEL = 'button[aria-label="发送"][data-xid="input-plate-send-button"]';
   var UPLOAD_ENTRY_SEL = 'button[aria-label="添加文件和工具"]';
 
-  // 粗判一行文本是否为我们的块（exec/probe/attach 任一）。
+  // rough check whether a text line is one of our blocks (exec/probe/attach).
   function looksLikeBlock(line) {
     line = (line || '').trim();
     if (line.charAt(0) !== '{') return false;
@@ -42,7 +42,7 @@
     }
   }
 
-  // 以复制按钮为锚，向上找代码块容器：离按钮最近的、文本中含合法块 JSON 行的祖先。
+  // anchor on the copy button, walk up to the code-block container: nearest ancestor whose text holds a valid block JSON line.
   function containerFor(btn) {
     var el = btn.parentElement, depth = 0;
     while (el && depth < 8) {
@@ -61,7 +61,7 @@
   window.__museHandsAdapters['www.google.com'] = {
     name: 'Google AI Mode',
 
-    // 页面级开关：只有 AI Mode 页（含其输入框）才生效。
+    // page-level gate: only active on AI Mode pages (those with its input box).
     isActive: function () {
       return !!document.querySelector(INPUT_SEL);
     },
@@ -73,13 +73,13 @@
         var c = containerFor(btns[i]);
         if (c && out.indexOf(c) === -1) out.push(c);
       }
-      // 只留最里层，避免嵌套重复计入（与其他适配器一致）。
+      // keep only the innermost; avoid double-counting nested matches (consistent with other adapters).
       return out.filter(function (el) {
         return !out.some(function (other) { return other !== el && el.contains(other); });
       });
     },
 
-    // 容器首行是语言标签，跳到第一个 JSON 行再交给 parseBlock。
+    // container's first line is a language label; jump to the first JSON line before handing to parseBlock.
     blockText: function (el) {
       var t = el.innerText || el.textContent || '';
       var lines = t.split('\n');
@@ -112,16 +112,16 @@
       return true;
     },
 
-    // 异步：点开上传菜单 → 等"添加文件"的 input 渲染 → 注入。
+    // async: open upload menu → wait for the "添加文件" input to render → inject.
     uploadFile: function (file) {
       return new Promise(function (resolve) {
         function done(ok, why) { resolve({ ok: ok, why: why }); }
 
         var entry = document.querySelector(UPLOAD_ENTRY_SEL);
-        if (!entry) { done(false, '页面无上传入口按钮'); return; }
+        if (!entry) { done(false, 'page has no upload entry button'); return; }
         entry.click();
 
-        // "添加文件" 的 input：accept 为空（"添加图片" 的 accept 以 image/ 开头，不要）。
+        // the "添加文件" input: empty accept (the "添加图片" one starts with image/ — not this one).
         function findFileInput() {
           var inputs = document.querySelectorAll('input[type=file]');
           for (var i = 0; i < inputs.length; i++) {
@@ -136,12 +136,12 @@
           try {
             var blob = new Blob([file.bytes], { type: file.mime || 'application/octet-stream' });
             f = new File([blob], file.name, { type: file.mime || 'application/octet-stream' });
-          } catch (e) { done(false, '构造 File 失败：' + e.message); return; }
+          } catch (e) { done(false, 'failed to construct File: ' + e.message); return; }
           try {
             var dt = new DataTransfer();
             dt.items.add(f);
             input.files = dt.files;
-          } catch (e) { done(false, '写入 input.files 失败：' + e.message); return; }
+          } catch (e) { done(false, 'failed to write input.files: ' + e.message); return; }
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.dispatchEvent(new Event('change', { bubbles: true }));
           done(true);
@@ -157,7 +157,7 @@
             inject(input);
           } else if (waited >= 5000) {
             clearInterval(timer);
-            done(false, '上传菜单打开后 5s 未找到文件 input');
+            done(false, 'file input not found 5s after upload menu opened');
           }
         }, 200);
       });

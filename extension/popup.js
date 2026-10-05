@@ -23,7 +23,7 @@ autoEl.addEventListener('change', function () {
 document.getElementById('ping').addEventListener('click', function () {
   statusEl.textContent = 'Connecting…';
   var done = false;
-  // background 侧 10 秒超时；这里 15 秒兜底，让 background 的结构化报错先赢
+  // background side times out at 10s; this 15s fallback lets background's structured error win
   var timer = setTimeout(function () {
     if (done) return;
     done = true;
@@ -36,7 +36,7 @@ document.getElementById('ping').addEventListener('click', function () {
     statusEl.textContent = text;
   }
   try {
-    // 办法二：不直连 native host，问 background 要一次真链路 ping
+    // approach 2: don't connect the native host directly; ask background for one real-link ping
     chrome.runtime.sendMessage({ type: 'ping_test' }, function (res) {
       if (chrome.runtime.lastError) {
         finish('Connection failed: ' + chrome.runtime.lastError.message);

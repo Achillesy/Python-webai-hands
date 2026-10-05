@@ -1,17 +1,18 @@
-// webai-hands 内容脚本（核心层，与站点无关）
+// webai-hands content script (core layer, site-agnostic)
 //
-// 架构：核心层 + 适配器层（每站点一份）。
-// 适配器通过 window.__museHandsAdapters[hostname] 注册；
-// 核心层按 location.hostname 选一个，调用它的：
-//   findBlocks()  → 返回候选元素数组
-//   fillResult()  → 填回输入框，返回 bool
-//   clickSend()   → 点发送，返回 bool
-// 新加一个 Web AI = 新加 adapters/xxx.js + 在 manifest 里注册，
-// 核心层零改动。
+// Architecture: core layer + adapter layer (one per site).
+// Adapters register via window.__museHandsAdapters[hostname];
+// the core picks one by location.hostname and calls its:
+//   findBlocks()  → returns candidate element array
+//   fillResult()  → fills the input box, returns bool
+//   clickSend()   → clicks send, returns bool
+// Adding a new Web AI = new adapters/xxx.js + register in manifest;
+// zero core changes.
 //
-// 规矩：抓到块递给本地 host 真执行；结果只填回、不自动发送
-//（除非用户在扩展面板里亲手开了自动发送）；已执行的 id 写
-// chrome.storage.local，刷新页面不重演历史命令。
+// Rules: caught blocks go to the local host for real execution; results are
+// only filled back, never auto-sent (unless the user manually enabled auto-send
+// in the extension panel); executed ids are written to chrome.storage.local so
+// refreshing the page never replays history commands.
 
 (function () {
 'use strict';
@@ -19,7 +20,7 @@
 var STABLE_MS = 1000;
 var VERSION = (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) ? chrome.runtime.getManifest().version : "?";
 var MAX_RESULT = 6000;
-var MAX_CMD_BYTES = 512 * 1024; // 单块命令上限：Chrome 原生消息通道单条硬上限 1MB，留足余量（host 侧文件分块取 500KB 同理）
+var MAX_CMD_BYTES = 512 * 1024; // per-block command cap: Chrome native messaging hard limit is 1MB per message; keep margin (host-side file chunks use 500KB likewise)
 var KEEP_HEAD = 2000;
 var KEEP_TAIL = 3500;
 var STORE_KEY = 'mh_processed_ids';
@@ -28,27 +29,28 @@ var HOSTNAME_KEY = 'mh_local_hostname';
 var MACHINE_KEY = 'mh_machine_id';
 var PLATFORM_KEY = 'mh_platform';
 
-// ---------- 选适配器 ----------
+// ---------- pick adapter ----------
 var adapters = window.__museHandsAdapters || {};
 var adapter = adapters[location.hostname] || null;
 if (!adapter) {
-  console.log('[webai-hands] 当前站点无适配器：' + location.hostname + '，内容脚本不启用');
+  console.log('[webai-hands] no adapter for this site: ' + location.hostname + '; content script disabled');
   return;
 }
-// 适配器可声明 isActive() 做页面级开关（www.google.com 只有 AI Mode 页生效，
-// 普通搜索页不启用）。SPA 客户端路由不重跑 content script，故此处不直接 return，
-// 由 scan() 每次惰性检查；页面变化后自动生效/失效。
+// Adapters may declare isActive() as a page-level gate (www.google.com: only AI Mode
+// pages active, plain search pages off). SPA client-side routing doesn't re-run the
+// content script, so don't return directly here; scan() lazily checks each time and
+// auto-enables/disables as the page changes.
 function adapterActive() {
   try { return !adapter.isActive || adapter.isActive(); }
   catch (e) { return false; }
 }
 if (adapterActive()) {
-  console.log('[webai-hands] 适配器已选中：' + adapter.name + '（' + location.hostname + '）');
+  console.log('[webai-hands] adapter selected: ' + adapter.name + ' (' + location.hostname + ')');
 } else {
-  console.log('[webai-hands] 适配器已选中：' + adapter.name + '，但当前页面不适用，等待页面变化');
+  console.log('[webai-hands] adapter selected: ' + adapter.name + ', but not applicable to this page; waiting for page change');
 }
-// 适配器可声明 blockText(el) 自定义块文本提取（默认 el.innerText）。
-// Google AI Mode 的代码块容器首行是语言标签，需跳到 JSON 行。
+// Adapters may declare blockText(el) for custom block text extraction (default el.innerText).
+// Google AI Mode's code-block container starts with a language label line; must jump to the JSON line.
 function blockTextOf(el) {
   try {
     if (adapter.blockText) return adapter.blockText(el) || '';
@@ -56,7 +58,7 @@ function blockTextOf(el) {
   return el.innerText || el.textContent || '';
 }
 
-// ---------- 状态 ----------
+// ---------- state ----------
 var processed = {};
 var inFlight = {};
 var cmdById = {};
@@ -65,7 +67,7 @@ var stableTimers = {};
 var ready = false;
 var pagePort = null;
 var localHostname = null;
-var localMachineId = null;  // M4 严格点名：本机 UUID（host 生成并持久化）
+var localMachineId = null;  // M4 strict addressing: local UUID (generated and persisted by host)
 var localPlatform = null;
 var incompleteAt = {};
 var pendingResults = [];
@@ -87,16 +89,16 @@ var warmupQuietTimer = null;
 var userAborted = false;
 var selfActing = false;
 
-// ---------- 会话与代数（Layer 1 调度 / 优雅停止） ----------
-// SESSION：本页面一次加载的逻辑会话 id；gen：代数，点停止即 +1，旧代全部过期。
+// ---------- session & generation (Layer 1 scheduling / graceful stop) ----------
+// SESSION: logical session id for one page load; gen: generation, +1 on stop, old generations all expire.
 var SESSION = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 var gen = 0;
 
-// 预热结束条件（任一满足即结束）：
-//  1. DOM 静默 WARMUP_QUIET_MS（且距启动已过 WARMUP_MIN_MS）；
-//  2. 兜底：启动 WARMUP_MAX_MS 后第一次 scan 时强制结束。
-// 注意静默检测必须用独立 timer：scan 只在 mutation 后 300ms 跑，
-// 在 inWarmup 里永远观测不到"3 秒静默"。
+// Warmup end conditions (either ends it):
+//  1. DOM quiet for WARMUP_QUIET_MS (and at least WARMUP_MIN_MS since start);
+//  2. Fallback: force-end on the first scan after WARMUP_MAX_MS since start.
+// Note: quiet detection needs its own timer — scan only runs 300ms after a mutation,
+// so "3s of quiet" can never be observed inside inWarmup.
 function pokeWarmup() {
   if (warmupDone) return;
   if (warmupQuietTimer) clearTimeout(warmupQuietTimer);
@@ -104,7 +106,7 @@ function pokeWarmup() {
     if (!warmupDone && Date.now() - warmupStart >= WARMUP_MIN_MS) {
       warmupDone = true;
       warmupQuietTimer = null;
-      console.log('[webai-hands] 预热结束（静默），此后出现的块才会执行');
+      console.log('[webai-hands] warmup ended (quiet); only blocks appearing after this will execute');
     }
   }, WARMUP_QUIET_MS);
 }
@@ -114,7 +116,7 @@ function inWarmup() {
   if (Date.now() - warmupStart >= WARMUP_MAX_MS) {
     warmupDone = true;
     if (warmupQuietTimer) { clearTimeout(warmupQuietTimer); warmupQuietTimer = null; }
-    console.log('[webai-hands] 预热结束（超时），此后出现的块才会执行');
+    console.log('[webai-hands] warmup ended (timeout); only blocks appearing after this will execute');
     return false;
   }
   return true;
@@ -123,15 +125,15 @@ function inWarmup() {
 function abortChain(reason) {
   if (userAborted) return;
   userAborted = true;
-  console.log('[webai-hands] 链中止：' + reason);
+  console.log('[webai-hands] chain aborted: ' + reason);
   var nTimers = Object.keys(stableTimers).length;
   var nFlight = Object.keys(inFlight).length;
   Object.keys(stableTimers).forEach(function (k) { clearTimeout(stableTimers[k]); delete stableTimers[k]; });
   Object.keys(inFlight).forEach(function (id) { delete inFlight[id]; });
   Object.keys(cmdById).forEach(function (id) { delete cmdById[id]; });
   Object.keys(attachMeta).forEach(function (id) { delete attachMeta[id]; });
-  // 中止前已见过（含正在稳定等待、尚无正文的块）一律吞掉：
-  // 之后链重新武装时它们不再复活，只有真正的新块才会执行。
+  // Blocks seen before the abort (incl. ones waiting for stability or still without body)
+  // are all swallowed: they won't resurrect when the chain re-arms; only truly new blocks execute.
   Object.keys(firstSeenAt).forEach(function (id) { markProcessed(id); });
   firstSeenAt = {};
   Object.keys(incompleteAt).forEach(function (id) { delete incompleteAt[id]; });
@@ -139,38 +141,39 @@ function abortChain(reason) {
   pendingResults = [];
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   flushHardDeadline = 0;
-  // 代数 +1：旧代命令/结果全部过期；通知 background 丢弃本会话排队项
+  // generation +1: old-generation commands/results all expire; tell background to drop this session's queued items
   gen++;
-  nagTotalThisGen = 0;  // 新一代重置 nag 熔断计数
+  nagTotalThisGen = 0;  // new generation resets the nag circuit-breaker counter
   try { getPort().postMessage({ type: 'stop', session: SESSION, gen: gen }); } catch (e) {}
-  // 有实际作废才代发通知：纯文本停止（无命令在跑）不打扰
+  // only relay a notice if something was actually voided: a plain-text stop (nothing running) doesn't disturb
   if (nTimers + nFlight > 0) sendCancelNotice(gen, nTimers, nFlight);
 }
 
-// 停止后代发一条用户消息（真发送）：既给用户可见确认，也让 AI 停手不再发新块。
-// 不走 mh_auto_send 开关 —— 用户亲手点的停止，通知必发；发送失败退化为只填不发。
+// After a stop, relay one user message (really sent): gives the user visible confirmation
+// and tells the AI to stop sending new blocks. Bypasses the mh_auto_send switch —
+// the user clicked stop by hand, so the notice must go out; on send failure, degrade to fill-only.
 function sendCancelNotice(curGen, nTimers, nFlight) {
-  var text = '⏹ [webai-hands 代发] 用户点击了停止按钮：第 ' + curGen + ' 代命令已全部作废' +
-    '（取消 ' + nTimers + ' 个待发，' + nFlight + ' 个执行中结果不再回填）。' +
-    '请暂停当前任务，等候用户下一步指令，不要发送新的命令块。';
+  var text = '⏹ [webai-hands] user clicked the stop button (auto-sent): all generation ' + curGen + ' commands are void' +
+    ' (' + nTimers + ' pending cancelled, ' + nFlight + ' in-flight results will not be filled back).' +
+    'Please pause the current task, wait for the next user instruction, and do not send new command blocks.';
   var ok = false;
   try { ok = adapter.fillResult(text); } catch (e) { ok = false; }
   if (ok) {
-    console.log('[webai-hands] 停止通知已填回，500ms 后发送');
+    console.log('[webai-hands] stop notice filled back, sending in 500ms');
     setTimeout(trySend, 500);
   } else {
-    console.log('[webai-hands] 停止通知填回失败，仅记录不打扰');
+    console.log('[webai-hands] stop notice fill-back failed; logging only, not disturbing');
   }
 }
 
-// 只填不发（忙拒绝等通知用，不触发自动发送）
+// fill-only (for busy-rejection etc. notices; never triggers auto-send)
 function fillOnly(text) {
   var ok = false;
   try { ok = adapter.fillResult(text); } catch (e) { ok = false; }
-  if (!ok) console.log('[webai-hands] 通知填回失败：', String(text).slice(0, 200));
+  if (!ok) console.log('[webai-hands] notice fill-back failed: ', String(text).slice(0, 200));
 }
 
-// ---------- 哨兵解析 ----------
+// ---------- sentinel parsing ----------
 function parseBlock(text) {
   var nl = text.indexOf('\n');
   var first = nl === -1 ? text : text.slice(0, nl);
@@ -201,7 +204,7 @@ function fingerprint(text) {
   return text.length + ':' + h;
 }
 
-// ---------- 去重 ----------
+// ---------- dedup ----------
 function loadProcessed(done) {
   try {
     chrome.storage.local.get([STORE_KEY, HOSTNAME_KEY, MACHINE_KEY, PLATFORM_KEY], function (res) {
@@ -209,16 +212,16 @@ function loadProcessed(done) {
       ids.forEach(function (id) { processed[id] = true; });
       if (res && res[HOSTNAME_KEY]) {
         localHostname = res[HOSTNAME_KEY];
-        console.log('[webai-hands] 本机 hostname（缓存）：' + localHostname);
+        console.log('[webai-hands] local hostname (cached): ' + localHostname);
       }
       if (res && res[MACHINE_KEY]) {
         localMachineId = res[MACHINE_KEY];
-        console.log('[webai-hands] 本机 machine_id（缓存）：' + localMachineId);
+        console.log('[webai-hands] local machine_id (cached): ' + localMachineId);
       }
       if (res && res[PLATFORM_KEY]) localPlatform = res[PLATFORM_KEY];
       if (!localMachineId) {
-        // M4 严格点名前置条件：建连触发后台 ping host，延迟重试读取。
-        // getPort() 会走到 background onConnect → ensureNativePort → ping → pong → 缓存。
+        // M4 strict-addressing precondition: connecting triggers a background ping to host; read with delayed retries.
+        // getPort() goes through background onConnect → ensureNativePort → ping → pong → cache.
         try { getPort(); } catch (e) {}
         retryMachineIdentity(0);
       }
@@ -231,13 +234,13 @@ function loadProcessed(done) {
   }
 }
 
-// 机器身份（machine_id）拿不到就重试几次（2s / 5s / 10s）。
-// 严格点名要求 machine_id 就绪才执行块；拿不到时块暂缓（不标记 processed），
-// 不沿用 hostname 时代的 fail-open。
+// Retry a few times (2s / 5s / 10s) if machine_id is unavailable.
+// Strict addressing requires machine_id ready before executing blocks; if unavailable,
+// blocks are deferred (not marked processed) — no fail-open like the hostname era.
 function retryMachineIdentity(n) {
   var waits = [2000, 5000, 10000];
   if (n >= waits.length) {
-    console.log('[webai-hands] 未拿到本机 machine_id：host 可能未安装或未启动，严格点名下块将暂缓执行');
+    console.log('[webai-hands] local machine_id unavailable: host may not be installed or started; blocks will be deferred under strict addressing');
     return;
   }
   setTimeout(function () {
@@ -246,11 +249,11 @@ function retryMachineIdentity(n) {
       chrome.storage.local.get([HOSTNAME_KEY, MACHINE_KEY, PLATFORM_KEY], function (res) {
         if (res && res[HOSTNAME_KEY] && !localHostname) {
           localHostname = res[HOSTNAME_KEY];
-          console.log('[webai-hands] 本机 hostname（延迟拿到）：' + localHostname);
+          console.log('[webai-hands] local hostname (obtained late): ' + localHostname);
         }
         if (res && res[MACHINE_KEY] && !localMachineId) {
           localMachineId = res[MACHINE_KEY];
-          console.log('[webai-hands] 本机 machine_id（延迟拿到）：' + localMachineId);
+          console.log('[webai-hands] local machine_id (obtained late): ' + localMachineId);
         }
         if (res && res[PLATFORM_KEY] && !localPlatform) localPlatform = res[PLATFORM_KEY];
         if (!localMachineId) retryMachineIdentity(n + 1);
@@ -268,7 +271,7 @@ function markProcessed(id) {
   } catch (e) {}
 }
 
-// ---------- 与 background 的长连接 ----------
+// ---------- long-lived connection to background ----------
 function flushResults() {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   flushHardDeadline = 0;
@@ -292,41 +295,42 @@ function scheduleFlush() {
   flushTimer = setTimeout(flushResults, wait);
 }
 
-// ---------- 扩展上下文失效 ----------
-// 扩展被重新加载/更新后，未刷新的旧标签页里的 content script 再调
-// chrome.runtime.* 会抛 "Extension context invalidated"，且无法自愈，
-// 必须刷新页面。这里提前识别，给出可操作的中文指引，而不是英文原错。
+// ---------- extension context invalidated ----------
+// After the extension is reloaded/updated, content scripts in unrefreshed old tabs
+// throw "Extension context invalidated" on chrome.runtime.* calls, with no self-healing;
+// the page must be refreshed. Detect it early and give actionable guidance
+// instead of the cryptic original error.
 var contextDead = false;
 function isInvalidatedError(e) {
   return !!e && /extension context invalid/i.test(e.message || '');
 }
-// context 失效指引只提醒一次（同页多块/重复定时器不刷屏）；刷新页面后重置。
+// show the context-dead guidance only once (no spam from multiple blocks/repeat timers on the same page); resets after refresh.
 var deadWarned = false;
 function warnContextDead() {
   if (deadWarned) return;
   deadWarned = true;
-  fillBack('扩展已重新加载，请刷新本页面后重试');
+  fillBack('Extension reloaded — please refresh this page and retry');
 }
 
 function getPort() {
   if (pagePort) return pagePort;
-  if (contextDead) throw new Error('扩展已重新加载，请刷新本页面后重试');
+  if (contextDead) throw new Error('Extension reloaded — please refresh this page and retry');
   try {
     pagePort = chrome.runtime.connect({ name: 'webai-hands' });
   } catch (e) {
     if (isInvalidatedError(e)) {
       contextDead = true;
-      console.error('[webai-hands] 扩展上下文已失效：扩展被重新加载/更新，请刷新本页面后重试');
-      throw new Error('扩展已重新加载，请刷新本页面后重试');
+      console.error('[webai-hands] extension context invalidated: extension was reloaded/updated; please refresh this page and retry');
+      throw new Error('Extension reloaded — please refresh this page and retry');
     }
     throw e;
   }
   pagePort.onMessage.addListener(function (msg) {
     if (!msg) return;
-    // 代数门控：过期代的消息（晚到的结果/错误/文件/忙拒绝）一律丢弃，治"穿透填回"
+    // generation gate: drop all expired-generation messages (late results/errors/files/busy-rejections); cures "fill-back piercing"
     if (msg.gen !== undefined && msg.gen !== gen) {
-      console.log('[webai-hands] 丢弃过期代消息：' + msg.type + ' id=' + (msg.id || '-') +
-                  ' 代=' + msg.gen + ' 当前=' + gen);
+      console.log('[webai-hands] dropping expired-generation message: ' + msg.type + ' id=' + (msg.id || '-') +
+                  ' gen=' + msg.gen + ' current=' + gen);
       return;
     }
     if (msg.type === 'file') {
@@ -340,70 +344,70 @@ function getPort() {
     } else if (msg.type === 'error' && msg.id) {
       delete inFlight[msg.id];
       delete cmdById[msg.id];
-      pendingResults.push('' + (msg.error || '未知错误'));
+      pendingResults.push('' + (msg.error || 'unknown error'));
       scheduleFlush();
     } else if (msg.type === 'busy' && msg.id) {
-      // 5 秒宽限拒绝：只填不发，告诉用户正在跑什么、被拒的是什么
+      // 5s grace rejection: fill-only; tell the user what's running and what was rejected
       delete inFlight[msg.id];
       delete cmdById[msg.id];
-      fillOnly('⏳ 本机正忙：`' + String(msg.running_cmd || '').slice(0, 120) +
-               '` 已运行 ' + (msg.running_for_s || 0) + 's；' +
-               '你的命令 `' + String(msg.rejected_cmd || '').slice(0, 120) +
-               '` 未执行（5 秒宽限已过）。可稍后手动重发。');
+      fillOnly('⏳ Local host is busy: `' + String(msg.running_cmd || '').slice(0, 120) +
+               '` has been running for ' + (msg.running_for_s || 0) + 's; ' +
+               'your command `' + String(msg.rejected_cmd || '').slice(0, 120) +
+               '` was not executed (5s grace elapsed). You can manually resend it later.');
     }
-    // progress 心跳帧只是保活长连接，不打扰页面
+    // progress heartbeat frames just keep the long-lived connection alive; don't disturb the page
   });
   pagePort.onDisconnect.addListener(function () {
     pagePort = null;
     Object.keys(inFlight).forEach(function (id) {
-      fillBack('与扩展后台的连接断开，结果未知。');
+      fillBack('Connection to the extension background lost; result unknown.');
     });
     inFlight = {};
   });
   return pagePort;
 }
 
-// ---------- M4 严格点名（UUID） ----------
-// host 字段只认 machine_id（UUID）；hostname 只做人类可读标签，不参与匹配。
-// hostname 可重名、可被改动，不能做身份标识。
+// ---------- M4 strict addressing (UUID) ----------
+// the host field only accepts machine_id (UUID); hostname is just a human-readable label, not used for matching.
+// hostnames can collide or be changed; they can't serve as identity.
 function hostMatches(want) {
   return !!localMachineId && want === localMachineId;
 }
 
-// 严格点名门控（exec/probe/attach 三路统一）：
-//   'pass'   放行；'defer' 暂缓（machine_id 未就绪，不标记 processed）；
-//   'ignore' 已处理（点名他机 / 熔断）；'nag' 缺 host，走自愈提醒。
+// Strict-addressing gate (unified for exec/probe/attach):
+//   'pass'   allow; 'defer' defer (machine_id not ready, don't mark processed);
+//   'ignore' handled (addressed to another machine / circuit-broken); 'nag' missing host, go self-heal.
 function checkHostGate(block) {
   if (!localMachineId) {
-    console.log('[webai-hands] machine_id 未就绪，块 ' + block.id + ' 暂缓');
+    console.log('[webai-hands] machine_id not ready; block ' + block.id + ' deferred');
     return 'defer';
   }
-  // bootstrap 豁免：__diag__ 是 AI 拿到 machine_id 的唯一通道，自己不能要求 host。
-  // 注意 diag 走 exec 块（host.py run_exec 特判），不限 kind。
+  // bootstrap exemption: __diag__ is the AI's only channel to obtain machine_id; it can't require host itself.
+  // note: diag travels as an exec block (special-cased in host.py run_exec), kind-agnostic.
   if ((block.cmd || '').trim() === '__diag__') return 'pass';
-  if (block.host === '*') return 'pass';  // 显式广播
-  if (block.host && hostMatches(block.host)) return 'pass';  // 点名本机
+  if (block.host === '*') return 'pass';  // explicit broadcast
+  if (block.host && hostMatches(block.host)) return 'pass';  // addressed to this machine
   if (block.host) {
-    console.log('[webai-hands] 块 ' + block.id + ' 目标机器 ' + block.host + ' 与本机不符，静默忽略');
+    console.log('[webai-hands] block ' + block.id + ' targets ' + block.host + ', mismatch with this machine; silently ignoring');
     markProcessed(block.id);
     return 'ignore';
   }
-  return 'nag';  // 没写 host：走 nag 自愈流程
+  return 'nag';  // no host written: go through the nag self-heal flow
 }
 
 var nagCountById = {};
 var nagTotalThisGen = 0;
-var NAG_PER_BLOCK = 1;  // 单块最多提醒 1 次
-var NAG_GLOBAL_CAP = 5; // 每 tab 每代全局封顶，超了只写 console（防 AI 装傻刷屏）
+var NAG_PER_BLOCK = 1;  // max 1 nag per block
+var NAG_GLOBAL_CAP = 5; // global cap per tab per generation; beyond that, console only (prevents the AI from feigning ignorance to spam)
 
-// 缺 host 自愈提醒：把本机 UUID 拍到 AI 脸上，请它换新 id 重发。
-// 强发（bypass mh_auto_send，与停止通知同级）——这是协议纠错消息，AI 必须看到。
-// 纯文本，不含 muse-exec 块，不会自触发；selfActing 由 trySend 负责。
+// Missing-host self-heal nag: slap the local UUID in front of the AI and ask it to resend with a new id.
+// Force-send (bypasses mh_auto_send, same level as the stop notice) — this is a protocol-correction
+// message the AI must see. Plain text, no muse-exec block, won't self-trigger; selfActing handled by trySend.
 function nagMissingHost(block) {
   var n = nagCountById[block.id] || 0;
   if (n >= NAG_PER_BLOCK || nagTotalThisGen >= NAG_GLOBAL_CAP) {
     if (nagTotalThisGen >= NAG_GLOBAL_CAP) {
-      console.log('[webai-hands] nag 熔断：块 ' + block.id + ' 缺 host，已达提醒上限，不再打扰');
+      console.log('[webai-hands] nag circuit-broken: block ' + block.id + ' missing host, nag cap reached; will not disturb further');
     }
     markProcessed(block.id);
     return;
@@ -411,46 +415,47 @@ function nagMissingHost(block) {
   nagCountById[block.id] = n + 1;
   nagTotalThisGen++;
   var msg =
-    '⚠️ [webai-hands] 收到一条没有目标机器 UUID 的命令（id=' + block.id + '），未执行。\n' +
-    '本机 UUID：' + localMachineId + '\n' +
-    '主机名：' + (localHostname || '?') + '，系统：' + (localPlatform || '?') + '\n' +
-    '请重发该命令：换一个新 id，并在 JSON 首行加上 "host":"' + localMachineId + '"。\n' +
-    '（`__diag__` 可免 host，`"host":"*"` 为广播，慎用。）';
-  console.log('[webai-hands] nag 缺 host：块 ' + block.id + '（第 ' + (n + 1) + ' 次）');
+    '⚠️ [webai-hands] received a command without a target machine UUID (id=' + block.id + '), not executed.\n' +
+    'Local UUID: ' + localMachineId + '\n' +
+    'Hostname: ' + (localHostname || '?') + ', platform: ' + (localPlatform || '?') + '\n' +
+    'Please resend the command: use a new id and add "host":"' + localMachineId + '" to the JSON first line.\n' +
+    '(`__diag__` is exempt from host; `"host":"*"` broadcasts — use with care.)';
+  console.log('[webai-hands] nag missing host: block ' + block.id + ' (time ' + (n + 1) + ')');
   var ok = false;
   try { ok = adapter.fillResult(msg); } catch (e) {
-    console.error('[webai-hands] nag 填回失败：', e);
+    console.error('[webai-hands] nag fill-back failed: ', e);
   }
   if (ok) setTimeout(trySend, 300);
-  else console.log('[webai-hands] nag 未能填回输入框，仅记日志');
+  else console.log('[webai-hands] nag could not be filled into the input box; logging only');
   markProcessed(block.id);
 }
 
-// ---------- 执行 ----------
+// ---------- execute ----------
 function execBlock(block) {
-  // 关键：残缺块（DeepSeek 里 <code> 只有首行 JSON、cmd 为空）
-  // 不标记 processed，等完整元素（<pre>）出现再执行。
+  // key: incomplete blocks (in DeepSeek, <code> may hold only the first JSON line with empty cmd)
+  // are NOT marked processed; wait for the complete element (<pre>) before executing.
   if (!block.cmd) {
     incompleteAt[block.id] = Date.now();
     if (!incompleteWarned[block.id]) {
       incompleteWarned[block.id] = true;
-      console.log('[webai-hands] 块 ' + block.id + ' 尚无命令正文，等待完整元素');
+      console.log('[webai-hands] block ' + block.id + ' has no command body yet; waiting for the complete element');
     }
     return;
   }
-  // 单块命令上限：超限直接拒收并回填指引，不转发、不重试（否则原生消息 1MB 硬上限处抛错，提示还含糊）。
-  // 必须 markProcessed，否则下次扫描同一块会反复回填。
+  // Per-block command cap: over-limit blocks are rejected outright with guidance filled back;
+  // never forwarded, never retried (otherwise it would blow up at the 1MB native-message hard cap with a vague error).
+  // Must markProcessed, or the next scan of the same block would fill back repeatedly.
   if (block.cmd.length > MAX_CMD_BYTES) {
-    console.log('[webai-hands] 块 ' + block.id + ' 命令过大（' + block.cmd.length + ' 字符），拒收');
+    console.log('[webai-hands] block ' + block.id + ' command too large (' + block.cmd.length + ' chars); rejected');
     markProcessed(block.id);
-    fillBack('[exec ' + block.id + '] 命令过大（约 ' + Math.round(block.cmd.length / 1024) +
-      'KB，单块上限 512KB），已拒收、未执行。' +
-      '请拆成多个小块分次执行（如分块 >> 追加写文件），或请用户把大文件以附件形式发给你再用 attach 通道。请换新 id 重发。');
+    fillBack('[exec ' + block.id + '] command too large (~' + Math.round(block.cmd.length / 1024) +
+      'KB, per-block cap 512KB); rejected, not executed. ' +
+      'Split into smaller blocks and run separately (e.g. chunked >> appends to a file), or ask the user to send the big file as an attachment and use the attach channel. Resend with a new id.');
     return;
   }
   inFlight[block.id] = true;
   cmdById[block.id] = block.cmd;
-  console.log('[webai-hands] 执行 ' + block.id + '：', block.cmd.slice(0, 120));
+  console.log('[webai-hands] executing ' + block.id + ': ', block.cmd.slice(0, 120));
   try {
     getPort().postMessage({
       type: 'exec',
@@ -461,26 +466,27 @@ function execBlock(block) {
       shell: block.shell,
       timeout: block.timeout
     });
-    // 发出去才落账：postMessage 抛异常说明根本没发出去，此时不记 processed，
-    // 用户刷新页面后同一块可重发，不丢命令（旧代码先落账会导致刷新后被跳过）。
+    // only book it once sent: a postMessage throw means it never went out — don't mark
+    // processed then, so the same block can be resent after refresh without losing the command
+    // (the old code booked first, causing post-refresh skips).
     markProcessed(block.id);
   } catch (e) {
     delete inFlight[block.id];
     delete cmdById[block.id];
     if (contextDead) warnContextDead();
-    else fillBack('发往扩展后台失败：' + e.message);
+    else fillBack('failed to send to extension background: ' + e.message);
   }
 }
 
-// ---------- 结果格式（M3 定型） ----------
+// ---------- result format (M3 finalized) ----------
 function clip(s) {
   if (s == null) return '';
   s = String(s);
   if (s.length <= MAX_RESULT) return s;
-  return s.slice(0, KEEP_HEAD) + '\n\n…（中略）…\n\n' + s.slice(s.length - KEEP_TAIL);
+  return s.slice(0, KEEP_HEAD) + '\n\n…(omitted)…\n\n' + s.slice(s.length - KEEP_TAIL);
 }
 
-// ---------- attach：向 host 要文件，交给适配器上传 ----------
+// ---------- attach: fetch file from host, hand to adapter for upload ----------
 function b64ToBytes(b64) {
   var bin = atob(b64);
   var len = bin.length;
@@ -490,23 +496,23 @@ function b64ToBytes(b64) {
 }
 
 function attachBlock(block) {
-  if (!block.path) { fillBack('[attach ' + block.id + '] 缺少 path'); return; }
+  if (!block.path) { fillBack('[attach ' + block.id + '] missing path'); return; }
   if (!adapter || typeof adapter.uploadFile !== 'function') {
-    fillBack('[attach ' + block.id + '] 当前站点适配器不支持上传');
+    fillBack('[attach ' + block.id + '] adapter for current site does not support upload');
     return;
   }
   inFlight[block.id] = true;
   cmdById[block.id] = 'attach: ' + block.path;
   attachMeta[block.id] = { text: block.text || null, send: !!block.send };
-  console.log('[webai-hands] attach ' + block.id + ' 请求文件 ' + block.path);
+  console.log('[webai-hands] attach ' + block.id + ' requesting file ' + block.path);
   try {
     getPort().postMessage({ type: 'read_file', id: block.id, path: block.path,
                             session: SESSION, gen: gen });
-    markProcessed(block.id);  // 发出去才落账（同 execBlock）：发送失败不记，刷新后可重发
+    markProcessed(block.id);  // book only once sent (same as execBlock): don't mark on send failure; resendable after refresh
   } catch (e) {
     delete inFlight[block.id]; delete attachMeta[block.id];
     if (contextDead) warnContextDead();
-    else fillBack('[attach ' + block.id + '] 请求文件失败：' + e.message);
+    else fillBack('[attach ' + block.id + '] file request failed: ' + e.message);
   }
 }
 
@@ -516,41 +522,41 @@ function onFileArrived(msg) {
   delete inFlight[msg.id];
   var bytes;
   try { bytes = b64ToBytes(msg.b64); }
-  catch (e) { fillBack('[attach ' + msg.id + '] base64 解码失败：' + e.message); return; }
-  console.log('[webai-hands] 文件已到 ' + msg.name + ' ' + bytes.length + ' 字节');
+  catch (e) { fillBack('[attach ' + msg.id + '] base64 decode failed: ' + e.message); return; }
+  console.log('[webai-hands] file arrived ' + msg.name + ' ' + bytes.length + ' bytes');
   var res;
   try {
     res = adapter.uploadFile({ name: msg.name, mime: msg.mime, bytes: bytes });
   } catch (e) {
-    fillBack('[attach ' + msg.id + '] 适配器上传抛异常：' + e.message);
+    fillBack('[attach ' + msg.id + '] adapter upload threw: ' + e.message);
     return;
   }
-  // uploadFile 可同步返回 {ok, why}，也可返回 Promise（gemini 需先点开上传菜单
-  // 等 input 渲染）。Promise.resolve 兼容两种。
+  // uploadFile may return {ok, why} synchronously or a Promise (gemini needs the upload menu
+  // opened first, then waits for the input to render). Promise.resolve covers both.
   Promise.resolve(res).then(function (r) {
     if (!r || !r.ok) {
-      fillBack('[attach ' + msg.id + '] 上传失败：' + ((r && r.why) || '未知'));
+      fillBack('[attach ' + msg.id + '] upload failed: ' + ((r && r.why) || 'unknown'));
       return;
     }
-    fillBack('[attach ' + msg.id + '] 已注入文件 ' + msg.name + '（' + bytes.length + ' 字节）');
+    fillBack('[attach ' + msg.id + '] file injected ' + msg.name + ' (' + bytes.length + ' bytes)');
     if (meta.text) {
       try { adapter.fillResult(meta.text); } catch (e) {}
     }
     if (meta.send) setTimeout(trySend, 500);
   }, function (e) {
-    fillBack('[attach ' + msg.id + '] 适配器上传抛异常：' + (e && e.message || e));
+    fillBack('[attach ' + msg.id + '] adapter upload threw: ' + (e && e.message || e));
   });
 }
 
 
-// ---------- DOM 探针（只读，本地处理，不经过 host） ----------
+// ---------- DOM probe (read-only, handled locally, never touches host) ----------
 function probeBlock(block) {
   markProcessed(block.id);
-  if (!block.sel) { fillBack('[probe ' + block.id + '] 缺少 sel 字段'); return; }
+  if (!block.sel) { fillBack('[probe ' + block.id + '] missing sel field'); return; }
   var nodes;
   try { nodes = document.querySelectorAll(block.sel); }
-  catch (e) { fillBack('[probe ' + block.id + '] 选择器语法错误：' + e.message); return; }
-  var lines = ['[probe ' + block.id + '] sel=' + block.sel + '  命中 ' + nodes.length + ' 个'];
+  catch (e) { fillBack('[probe ' + block.id + '] selector syntax error: ' + e.message); return; }
+  var lines = ['[probe ' + block.id + '] sel=' + block.sel + '  matched ' + nodes.length];
   nodes.forEach(function (n, i) {
     if (i >= 10) { return; }
     var rect = n.getBoundingClientRect();
@@ -566,7 +572,7 @@ function probeBlock(block) {
                (par && par.getAttribute ? (par.getAttribute('aria-label') || '-') : '-'));
     lines.push('    html=' + (n.outerHTML || '').slice(0, 200).replace(/\s+/g, ' '));
   });
-  if (nodes.length > 10) lines.push('  …(只显示前 10 个)');
+  if (nodes.length > 10) lines.push('  …(showing first 10 only)');
   fillBack(lines.join('\n'));
 }
 
@@ -597,13 +603,13 @@ function formatResult(res) {
   }
   var secs = ((res.duration_ms || 0) / 1000).toFixed(1);
   var lines = [];
-  lines.push('webai-hands 结果 id=' + res.id + ' exit=' + res.exit_code +
+  lines.push('webai-hands result id=' + res.id + ' exit=' + res.exit_code +
              ' ' + secs + 's host=' + (res.hostname || '?'));
   var cmd = cmdById[res.id];
   if (cmd) {
     var first = cmd.split('\n')[0];
     var n = cmd.split('\n').length;
-    var extra = n > 1 ? '（共 ' + n + ' 行）' : '';
+    var extra = n > 1 ? ' (' + n + ' lines total)' : '';
     lines.push('cmd: ' + (first.length > 120 ? first.slice(0, 120) + '…' : first) + extra);
   }
   if (res.error) lines.push('err: ' + res.error);
@@ -616,23 +622,23 @@ function formatResult(res) {
   return lines.join('\n');
 }
 
-// ---------- 填回（交给适配器） ----------
+// ---------- fill-back (handed to adapter) ----------
 function fillBack(text) {
   ctxChars += (text ? text.length : 0);
   if (!ctxWarned && ctxChars > 150000) {
     ctxWarned = true;
-    text = text + '\n\n[webai-hands] 上下文将满（已回填 ' + ctxChars + ' 字符）。建议新开对话，先发 __ctx_summary__ 存档。';
+    text = text + '\n\n[webai-hands] context nearly full (' + ctxChars + ' chars filled back). Suggest starting a new chat; send __ctx_summary__ first to archive.';
   }
   var ok = false;
   try { ok = adapter.fillResult(text); } catch (e) {
-    console.error('[webai-hands] adapter.fillResult 抛异常：', e);
+    console.error('[webai-hands] adapter.fillResult threw: ', e);
     ok = false;
   }
   if (ok) {
-    console.log('[webai-hands] 结果已填回输入框');
+    console.log('[webai-hands] result filled back into input box');
     maybeAutoSend();
   } else {
-    console.log('[webai-hands] 适配器未找到输入框，结果只能进日志：', text.slice(0, 200));
+    console.log('[webai-hands] adapter found no input box; result goes to log only: ', text.slice(0, 200));
   }
 }
 
@@ -640,12 +646,12 @@ function maybeAutoSend() {
   try {
     chrome.storage.local.get([AUTO_KEY], function (res) {
       if (res && res[AUTO_KEY]) {
-        // 发送按钮是输入内容后渲染的；大文本插入时框架可能慢半拍，最多重试 4 次
+        // the send button renders after input appears; frameworks may lag on big inserts — retry up to 4 times
         var n = 0;
         (function attempt() {
-          if (doClickSend()) { console.log('[webai-hands] 已自动发送'); return; }
+          if (doClickSend()) { console.log('[webai-hands] auto-sent'); return; }
           if (++n < 4) setTimeout(attempt, 400);
-          else console.log('[webai-hands] 自动发送：多次未找到发送按钮，保持只填不发');
+          else console.log('[webai-hands] auto-send: send button never found after retries; staying fill-only');
         })();
       }
     });
@@ -656,25 +662,25 @@ function doClickSend() {
   var ok = false;
   selfActing = true;
   try { ok = adapter.clickSend(); } catch (e) {
-    console.error('[webai-hands] adapter.clickSend 抛异常：', e);
+    console.error('[webai-hands] adapter.clickSend threw: ', e);
     ok = false;
   } finally { selfActing = false; }
   return !!ok;
 }
 
 function trySend() {
-  if (doClickSend()) console.log('[webai-hands] 已自动发送');
-  else console.log('[webai-hands] 未找到发送按钮，保持只填不发');
+  if (doClickSend()) console.log('[webai-hands] auto-sent');
+  else console.log('[webai-hands] send button not found; staying fill-only');
 }
 
-// ---------- 扫描 ----------
+// ---------- scan ----------
 function scan() {
   if (!ready) return;
-  if (contextDead) return;  // 扩展已重载：旧 context 做任何事都是徒劳，等用户刷新
-  if (!adapterActive()) return;  // 页面级开关（如 google.com 非 AI Mode 页）
+  if (contextDead) return;  // extension reloaded: the old context can't do anything useful; wait for user refresh
+  if (!adapterActive()) return;  // page-level switch (e.g. google.com non-AI-Mode pages)
   var els;
   try { els = adapter.findBlocks(); } catch (e) {
-    console.error('[webai-hands] adapter.findBlocks 抛异常：', e);
+    console.error('[webai-hands] adapter.findBlocks threw: ', e);
     return;
   }
   if (!els || !els.length) return;
@@ -685,37 +691,37 @@ function scan() {
     if (inWarmup() || baselineIds[block.id] || PLACEHOLDER_IDS[block.id]) {
       if (!baselineIds[block.id]) {
         baselineIds[block.id] = true;
-        console.log('[webai-hands] 预热吸收历史块 ' + block.id);
+        console.log('[webai-hands] warmup absorbed history block ' + block.id);
       }
       markProcessed(block.id);
       return;
     }
     if (block.kind !== 'probe' && block.kind !== 'attach' && !block.cmd && incompleteAt[block.id] && Date.now() - incompleteAt[block.id] < 5000) return;
     if (userAborted) {
-      // 中止后出现的新块 = 用户还在继续对话：重新武装，后续块正常执行。
-      // 中止前已见过的块已在 abortChain 里标记 processed，不会复活。
+      // a new block after abort = user kept chatting: re-arm; later blocks execute normally.
+      // blocks seen before the abort were marked processed in abortChain and won't resurrect.
       userAborted = false;
-      console.log('[webai-hands] 中止后出现新块 ' + block.id + '，链已重新武装');
+      console.log('[webai-hands] new block after abort ' + block.id + '; chain re-armed');
     }
     if (!firstSeenAt[block.id]) {
       firstSeenAt[block.id] = Date.now();
-      console.log('[webai-hands] 标记块 ' + block.id + ' 出现了');
+      console.log('[webai-hands] block ' + block.id + ' seen');
     }
     var fp = block.id + '|' + fingerprint(text);
     var genAtSchedule = gen;
     clearTimeout(stableTimers[fp]);
     stableTimers[fp] = setTimeout(function () {
       delete stableTimers[fp];
-      if (genAtSchedule !== gen) return;  // 已被新一代作废，不转发
+      if (genAtSchedule !== gen) return;  // voided by a newer generation; don't forward
       if (userAborted || processed[block.id] || inFlight[block.id]) return;
       var again = parseBlock(blockTextOf(el));
       if (!again) return;
-      // M4 严格点名门控（exec/probe/attach 三路统一）
+      // M4 strict-addressing gate (unified for exec/probe/attach)
       var gate = checkHostGate(again);
-      if (gate === 'defer') return;              // machine_id 未就绪：暂缓，不标记
-      if (gate === 'ignore') return;             // 点名他机 / 熔断：已标记 processed
+      if (gate === 'defer') return;              // machine_id not ready: defer, don't mark
+      if (gate === 'ignore') return;             // addressed elsewhere / circuit-broken: already marked processed
       if (gate === 'nag') { nagMissingHost(again); return; }
-      console.log('[webai-hands] 标记块 ' + block.id + ' 已稳定，开始执行');
+      console.log('[webai-hands] block ' + block.id + ' stable, executing');
       if (again.kind === 'probe') probeBlock(again);
       else if (again.kind === 'attach') attachBlock(again);
       else execBlock(again);
@@ -729,7 +735,7 @@ document.addEventListener('click', function (e) {
   var btn = t && t.closest ? t.closest('button, [role="button"]') : null;
   if (!btn) return;
   if (!adapter.isStopButton || !adapter.isStopButton(btn)) return;
-  abortChain('用户点了停止/中断按钮');
+  abortChain('user clicked the stop/interrupt button');
 }, true);
 
 var scanTimer = null;
@@ -744,7 +750,7 @@ new MutationObserver(function () {
 loadProcessed(function () {
   pokeWarmup();
   scan();
-  console.log('[webai-hands] 内容脚本已启动 v' + VERSION + '：需 v>=2 的块才执行，结果默认只填回不发送。');
+  console.log('[webai-hands] content script started v' + VERSION + ': only v>=2 blocks execute; results are fill-only by default.');
 });
 chrome.storage.onChanged.addListener(function (changes, area) {
   if (area !== "local" || !changes[MACHINE_KEY]) return;

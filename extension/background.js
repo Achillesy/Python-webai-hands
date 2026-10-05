@@ -1,10 +1,10 @@
-// webai-hands 扩展 service worker
-// M1：点图标 → ping 本地 host → pong 回来徽标变 ✓（通桥验收）。
-// M2：内容脚本经长连接 Port 递来 exec → 转 Native Messaging 给 host →
-//     host 的 result / progress 沿原路回内容脚本。图标徽标即状态：
-//     … 执行中、✓ 就绪/完成、✕ 断开。
-// M4：pong 里的 machine_id（UUID）缓存进 chrome.storage.local，
-//     供内容脚本读取，做严格点名路由。hostname 只保留做人类可读标签。
+// webai-hands extension service worker
+// M1: click icon → ping local host → pong returns, badge flips to ✓ (bridge acceptance).
+// M2: content script delivers exec via long-lived Port → forwarded to host via Native Messaging →
+//     host's result / progress return to the content script the same way. Icon badge = status:
+//     … running, ✓ ready/done, ✕ disconnected.
+// M4: machine_id (UUID) from pong is cached into chrome.storage.local,
+//     for the content script to read for strict-addressing routing. hostname kept only as a human-readable label.
 const MACHINE_KEY = "mh_machine_id";
 
 const HOST = "com.webai.hands";
@@ -12,15 +12,15 @@ const HOSTNAME_KEY = "mh_local_hostname";
 const PLATFORM_KEY = "mh_platform";
 let nativePort = null;
 const pending = new Map(); // exec id -> {port, session, gen}
-const fileBuf = new Map(); // read_file id -> 累积的 file_chunk
+const fileBuf = new Map(); // read_file id -> accumulated file_chunks
 let fileBufTimer = null; // P1-1: single-shot timeout guard for incomplete fileBuf
-const pingTests = new Map(); // ping_test id -> {timer, sendResponse}（办法二：popup 测通桥）
+const pingTests = new Map(); // ping_test id -> {timer, sendResponse} (approach 2: popup bridge test)
 
-// ---------- Layer 1 调度器 ----------
-// host 全局顺序执行；background 做内存 FIFO，一次只发一个给 host。
-// session：内容脚本每页加载生成；gen：代数，点停止即 +1，旧代全部过期。
-// 跨 session 遇忙给 5 秒宽限，仍忙则拒绝（不进 host 队列）；同 session 突发无限排队。
-const portGen = new Map();  // pagePort -> 当前代数（默认 0）
+// ---------- Layer 1 scheduler ----------
+// host executes globally in order; background keeps an in-memory FIFO, one at a time to host.
+// session: generated per page load by the content script; gen: generation, +1 on stop, old generations all expire.
+// cross-session when busy gets a 5s grace; still busy → reject (never enters host queue); same-session bursts queue unbounded.
+const portGen = new Map();  // pagePort -> current generation (default 0)
 const schedQueue = [];      // [{port, kind, msg, session, gen, graceTimer}]
 let hostBusy = false;
 let running = null;         // {id, port, session, gen, cmd, startTime}
@@ -35,7 +35,7 @@ function dropSchedItem(item) {
   if (item.graceTimer) { clearTimeout(item.graceTimer); item.graceTimer = null; }
 }
 
-// 从队首取可发的项：过期代跳过；一次只发一个
+// take the next sendable item from the head: skip expired generations; one at a time
 function pump() {
   if (hostBusy) return;
   while (schedQueue.length) {
@@ -46,7 +46,7 @@ function pump() {
       continue;
     }
     schedQueue.shift();
-    dropSchedItem(item);  // 转发前取消宽限计时
+    dropSchedItem(item);  // cancel grace timer before forwarding
     forwardToHost(item);
     return;
   }
@@ -84,7 +84,7 @@ function forwardToHost(item) {
     pending.delete(item.msg.id);
     try {
       item.port.postMessage({ type: "error", id: item.msg.id, gen: item.gen,
-        error: "发往本地 host 失败：" + e.message });
+        error: "failed to send to local host: " + e.message });
     } catch (err) {}
     setBadge("✕", "#c62828");
     pump();
@@ -93,16 +93,16 @@ function forwardToHost(item) {
 
 function enqueue(port, kind, msg) {
   const g = (typeof msg.gen === "number") ? msg.gen : curGenOf(port);
-  if (g < curGenOf(port)) return;  // 过期代，直接忽略
+  if (g < curGenOf(port)) return;  // expired generation, ignore
   const item = { port, kind, msg,
                  session: msg.session || "", gen: g, graceTimer: null };
-  // 5 秒宽限：跨 session 且 host 正忙时才计时；同 session 突发无限排队；
-  // read_file 不进宽限策略（只排队）。
+  // 5s grace: only timed for cross-session while host is busy; same-session bursts queue unbounded;
+  // read_file skips the grace policy (queues only).
   if (kind === "exec" && hostBusy && running && item.session !== running.session) {
     item.graceTimer = setTimeout(() => {
       item.graceTimer = null;
       const idx = schedQueue.indexOf(item);
-      if (idx < 0) return;  // 已转发或已作废
+      if (idx < 0) return;  // already forwarded or voided
       schedQueue.splice(idx, 1);
       const secs = running ? Math.round((Date.now() - running.startTime) / 1000) : 0;
       const rcmd = running ? String(running.cmd).slice(0, 200) : "";
@@ -112,7 +112,7 @@ function enqueue(port, kind, msg) {
           running_cmd: rcmd, running_for_s: secs,
           rejected_cmd: String(item.msg.cmd || "").slice(0, 200) });
       } catch (e) {}
-      console.log("[webai-hands] 5 秒宽限已过，拒绝跨 session 命令 " + item.msg.id);
+      console.log("[webai-hands] 5s grace elapsed, rejecting cross-session command " + item.msg.id);
     }, GRACE_MS);
   }
   schedQueue.push(item);
@@ -131,21 +131,21 @@ function ensureNativePort() {
     if (!msg) return;
     if (msg.type === "pong") {
       setBadge("✓", "#2e7d32");
-      // M4 严格点名：缓存本机 machine_id（UUID），供内容脚本做路由判断；
-      // hostname 只保留做人类可读标签。
+      // M4 strict addressing: cache local machine_id (UUID) for the content script's routing decisions;
+      // hostname kept only as a human-readable label.
       try {
         const obj = {};
         if (msg.hostname) obj[HOSTNAME_KEY] = msg.hostname;
         if (msg.machine_id) {
           obj[MACHINE_KEY] = msg.machine_id;
-          console.log("[webai-hands] pong 已缓存 machine_id=" + msg.machine_id);
+          console.log("[webai-hands] pong cached machine_id=" + msg.machine_id);
         }
         if (msg.platform) obj[PLATFORM_KEY] = msg.platform;
         if (Object.keys(obj).length) chrome.storage.local.set(obj);
       } catch (e) {}
-      // 办法二：popup"测通桥"的 pong 按 id 在这里认领（pingtest- 前缀）。
-      // 测的是命令真正走的链路 —— 此前 popup 直连自己的端口，"已连接"可能是假绿
-      // （2026-10-04 真站教训：popup 显示已连接，background 端口一次都没建过）。
+      // approach 2: popup "test bridge" pongs are claimed here by id (pingtest- prefix).
+      // this tests the link commands really travel — previously popup connected its own port, so "connected" could be a false green
+      // (2026-10-04 live-site lesson: popup showed connected while background never built a port).
       var pt = pingTests.get(msg.id);
       if (pt) {
         pingTests.delete(msg.id);
@@ -179,7 +179,7 @@ function ensureNativePort() {
                              b64: buf.chunks.join("") });
           } catch (e) {}
         } else if (pg) {
-          console.log("[webai-hands] 丢弃过期代文件 id=" + msg.id);
+          console.log("[webai-hands] dropping expired-generation file id=" + msg.id);
         }
         pump();
       }
@@ -198,11 +198,11 @@ function ensureNativePort() {
           try {
             page.postMessage(Object.assign({}, msg, { gen: entry.gen }));
           } catch (e) {
-            /* 页面已关，丢掉即可 */
+            /* page closed, just drop it */
           }
         } else {
-          console.log("[webai-hands] 丢弃过期代 " + msg.type + " id=" + msg.id +
-                      " 代=" + entry.gen + " 当前=" + curGenOf(page));
+          console.log("[webai-hands] dropping expired generation " + msg.type + " id=" + msg.id +
+                      " gen=" + entry.gen + " current=" + curGenOf(page));
         }
       }
       if (msg.type === "result") setBadge("✓", "#2e7d32");
@@ -224,13 +224,13 @@ function ensureNativePort() {
     }
     pending.clear();
     fileBuf.clear();
-    // 办法二：host 断开时，未完成的测通桥也立即报错，不让它等到 10 秒超时
+    // approach 2: when host disconnects, pending bridge tests error out immediately instead of waiting for the 10s timeout
     for (const [pid, pt] of pingTests) {
       clearTimeout(pt.timer);
       try { pt.sendResponse({ ok: false, error: "local host disconnected" }); } catch (e) {}
     }
     pingTests.clear();
-    // 排队未发的也一并报错，不静默吞掉
+    // queued-but-unsent items error out too; never silently swallowed
     while (schedQueue.length) {
       const it = schedQueue.shift();
       dropSchedItem(it);
@@ -240,9 +240,9 @@ function ensureNativePort() {
       } catch (e) {}
     }
   });
-  // §6.7 前置条件：建连即 ping，pong 带回 hostname 并缓存到 storage。
-  // 不能依赖用户点图标 —— manifest 配了 default_popup，onClicked 不会触发。
-  // 办法二：popup"测通桥"也不再直连，统一走这里的端口（测真链路）。
+  // §6.7 precondition: ping on connect; pong returns hostname, cached to storage.
+  // can't rely on the user clicking the icon — manifest sets default_popup, so onClicked never fires.
+  // approach 2: popup "test bridge" no longer connects directly; everything goes through this port (tests the real link).
   try { nativePort.postMessage({ type: "ping", id: "__init__" + Date.now() }); } catch (e) {}
   return nativePort;
 }
@@ -259,10 +259,10 @@ chrome.action.onClicked.addListener(() => {
 
 chrome.runtime.onConnect.addListener((pagePort) => {
   if (pagePort.name !== "webai-hands") return;
-  // M4：内容脚本建连即建 native 端口并 ping（ensureNativePort 内部发 __init__ ping），
-  // pong 带回 machine_id/hostname/platform 缓存到 storage。
-  // 不能等到首个命令才建连 —— 否则 machine_id 在首个命令到来前永远拿不到，
-  // 严格点名下所有块都会被暂缓（2026-10-04 真站实测发现此 bug）。
+  // M4: content script builds the native port and pings on connect (ensureNativePort sends an __init__ ping internally),
+  // pong returns machine_id/hostname/platform, cached to storage.
+  // must not wait for the first command to connect — otherwise machine_id is never available before it arrives,
+  // and every block would be deferred under strict addressing (bug found in 2026-10-04 live-site testing).
   try { ensureNativePort(); } catch (e) {}
   pagePort.onMessage.addListener((msg) => {
     if (msg && msg.type === "exec" && msg.id && msg.cmd) {
@@ -270,7 +270,7 @@ chrome.runtime.onConnect.addListener((pagePort) => {
     } else if (msg && msg.type === "read_file" && msg.id && msg.path) {
       enqueue(pagePort, "read_file", msg);
     } else if (msg && msg.type === "stop") {
-      // 用户点了停止：代数推进，本会话旧代排队项全部作废
+      // user hit stop: generation advances, all queued items of old generations in this session are voided
       const g = (typeof msg.gen === "number") ? msg.gen : curGenOf(pagePort) + 1;
       portGen.set(pagePort, g);
       for (let i = schedQueue.length - 1; i >= 0; i--) {
@@ -280,7 +280,7 @@ chrome.runtime.onConnect.addListener((pagePort) => {
           dropSchedItem(it);
         }
       }
-      console.log("[webai-hands] 收到 stop：session=" + (msg.session || "") + " 代=" + g);
+      console.log("[webai-hands] received stop: session=" + (msg.session || "") + " gen=" + g);
     }
   });
   pagePort.onDisconnect.addListener(() => {
@@ -294,9 +294,9 @@ chrome.runtime.onConnect.addListener((pagePort) => {
     portGen.delete(pagePort);
   });
 });
-// ---------- 办法二：popup"测通桥"走 background 的 native 端口 ----------
-// popup 发 {type:"ping_test"}，这里经 ensureNativePort() 发 ping，pong 按 id
-// 认领后回给 popup。测的是命令真正走的链路，不是平行通道。
+// ---------- approach 2: popup "test bridge" goes through background's native port ----------
+// popup sends {type:"ping_test"}; here ensureNativePort() sends the ping, pong is claimed by id
+// and returned to popup. Tests the link commands really travel, not a parallel channel.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.type !== "ping_test") return false;
   var pid = "pingtest-" + Date.now() + "-" + Math.floor(Math.random() * 1e6);
@@ -312,7 +312,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     clearTimeout(timer);
     try { sendResponse({ ok: false, error: "failed to reach host: " + e.message }); } catch (ee) {}
   }
-  return true; // 异步回包，保持消息通道
+  return true; // async response; keep the message channel open
 });
 
 // ---------- Onboarding: open setup page after install ----------

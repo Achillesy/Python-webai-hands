@@ -13,11 +13,12 @@
     },
 
 
-    // DeepSeek 附件限制（2026-10-02 实测，是网页前端的限制）：
-    // - 不收压缩包：zip / rar / 7z / tar / gz / bz2 / xz / tgz 等，
-    //   前端会直接拒掉。这里先拦，报错信息直接告诉用户解压后再传，
-    //   免得文件塞进输入框了才被拒、桥还误报成功。
-    // - 其他类型走 input[type=file] 的 accept（实测 txt 可传）。
+    // DeepSeek attachment limits (verified 2026-10-02, enforced by the web frontend):
+    // - No archives: zip / rar / 7z / tar / gz / bz2 / xz / tgz etc. —
+    //   the frontend rejects them outright. Block here and tell the user to
+    //   extract first, so the file isn't rejected after landing in the input
+    //   while the bridge wrongly reports success.
+    // - Other types follow input[type=file]'s accept (txt verified to upload).
     uploadFile: function (file) {
       // file: {name, mime, bytes(Uint8Array)}
       var name = file.name || '';
@@ -28,24 +29,24 @@
         'bz2': 1, 'xz': 1, 'tgz': 1, 'tbz2': 1, 'txz': 1, 'cab': 1
       };
       if (ARCHIVE_EXTS[ext]) {
-        return { ok: false, why: 'DeepSeek 不收压缩包（' + name + '），请解压后传里面的文件' };
+        return { ok: false, why: 'DeepSeek rejects archives (' + name + '); please extract and send the inner files' };
       }
       var inputs = document.querySelectorAll('input[type=file]');
-      if (!inputs.length) return { ok: false, why: '页面无 input[type=file]' };
+      if (!inputs.length) return { ok: false, why: 'page has no input[type=file]' };
       var input = inputs[0];
       var blob, f;
       try {
         blob = new Blob([file.bytes], { type: file.mime || 'application/octet-stream' });
         f = new File([blob], file.name, { type: file.mime || 'application/octet-stream' });
       } catch (e) {
-        return { ok: false, why: '构造 File 失败：' + e.message };
+        return { ok: false, why: 'failed to construct File: ' + e.message };
       }
       var dt = new DataTransfer();
       dt.items.add(f);
       try {
         input.files = dt.files;
       } catch (e) {
-        return { ok: false, why: '写入 input.files 失败：' + e.message };
+        return { ok: false, why: 'failed to write input.files: ' + e.message };
       }
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));

@@ -1,7 +1,7 @@
-// webai-hands 适配器：muse.ai
-// 从油猴探针 v0.1.2 平移并验证过的 DOM 逻辑。
-// muse.ai 的代码块结构是 <pre><code>...</code></pre>，
-// 这里只保留最内层 <code>，避免同一块被外层容器重复计入。
+// webai-hands adapter: muse.ai
+// DOM logic ported from the Tampermonkey probe v0.1.2 and verified.
+// muse.ai code blocks are <pre><code>...</code></pre>,
+// keep only the innermost <code> so one block isn't double-counted via outer containers.
 
 (function () {
   'use strict';
@@ -10,16 +10,17 @@
   reg['muse.ai'] = {
     name: 'muse',
 
-    // 注：未实现 isStopButton（用户点停止/中断按钮时中止整条链，见 content.js）。
-    // 原因：muse.ai 的停止按钮尚无实测的 DOM 特征可依据，不硬抄 deepseek
-    // 适配器的文本正则，避免误伤。待实测补充选择器后再实现。
-    // （无此方法时 content.js 会静默跳过，不影响其它功能。）
+    // NOTE: isStopButton not implemented (aborts the whole chain when the user
+    // hits stop/interrupt, see content.js). Reason: no verified DOM signature
+    // for muse.ai's stop button yet; won't copy deepseek adapter's text regex
+    // blindly and risk false positives. Implement after real-site verification.
+    // (content.js silently skips when this method is absent; other features unaffected.)
 
     findBlocks: function () {
       var els = Array.prototype.slice.call(
         document.querySelectorAll('pre code, code, [class*="code"]')
       );
-      // 只留最里层元素，避免同一块被外层容器重复计入
+      // keep only innermost elements; avoid double-counting via outer containers
       return els.filter(function (el) {
         return !els.some(function (other) {
           return other !== el && el.contains(other);
@@ -28,29 +29,29 @@
     },
 
 
-    // Muse 附件限制（2026-10-02 实测）：
-    // - input[type=file] 没有 accept 属性，无已知类型限制；
-    // - 实测通过：txt / zip / rar / exe / 7z；10MB 文件实传成功；
-    // - host 侧单文件上限 25MB（见 native-host/host.py）。
-    // 这里不做类型预检，有问题让站点自己报错。
+    // Muse attachment limits (verified 2026-10-02):
+    // - input[type=file] has no accept attribute; no known type restrictions;
+    // - verified: txt / zip / rar / exe / 7z; 10MB file uploaded successfully;
+    // - host-side per-file cap 25MB (see native-host/host.py).
+    // No type pre-check here; let the site report its own errors.
     uploadFile: function (file) {
       // file: {name, mime, bytes(Uint8Array)}
       var inputs = document.querySelectorAll('input[type=file]');
-      if (!inputs.length) return { ok: false, why: '页面无 input[type=file]' };
+      if (!inputs.length) return { ok: false, why: 'page has no input[type=file]' };
       var input = inputs[0];
       var blob, f;
       try {
         blob = new Blob([file.bytes], { type: file.mime || 'application/octet-stream' });
         f = new File([blob], file.name, { type: file.mime || 'application/octet-stream' });
       } catch (e) {
-        return { ok: false, why: '构造 File 失败：' + e.message };
+        return { ok: false, why: 'failed to construct File: ' + e.message };
       }
       var dt = new DataTransfer();
       dt.items.add(f);
       try {
         input.files = dt.files;
       } catch (e) {
-        return { ok: false, why: '写入 input.files 失败：' + e.message };
+        return { ok: false, why: 'failed to write input.files: ' + e.message };
       }
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));

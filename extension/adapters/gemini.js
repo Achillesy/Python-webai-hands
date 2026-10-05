@@ -1,11 +1,11 @@
-// webai-hands 适配器：gemini.google.com
-// DOM 依据：2026-10-03 经浏览器实测采集。
-// - 代码块：<code-block> … <pre><code data-test-id="code-content">（data-test-id 稳定，
-//   Angular 的 ng-tns-* 类名后缀会变，不要用它做选择器）。
-// - 输入框：Quill 编辑器 div[contenteditable="true"][role="textbox"]，无 textarea。
-// - 发送按钮：button[aria-label="发送"]（纯图标按钮，有文字才渲染）。
-// - 停止按钮：button[aria-label="停止回答"]，内含 mat-icon[data-mat-icon-name="stop"]。
-// - 文件 input：静态页没有，上传时动态渲染，uploadFile 在调用时现查。
+// webai-hands adapter: gemini.google.com
+// DOM basis: captured via real browser on 2026-10-03.
+// - Code blocks: <code-block> … <pre><code data-test-id="code-content"> (data-test-id is stable,
+//   Angular's ng-tns-* class suffixes change; don't use them as selectors).
+// - Input: Quill editor div[contenteditable="true"][role="textbox"], no textarea.
+// - Send button: button[aria-label="发送"] (icon-only button, renders only with text).
+// - Stop button: button[aria-label="停止回答"], contains mat-icon[data-mat-icon-name="stop"].
+// - File input: absent from the static page, rendered dynamically on upload; uploadFile looks it up at call time.
 
 (function () {
   'use strict';
@@ -15,22 +15,23 @@
     name: 'gemini',
 
     findBlocks: function () {
-      // 每个围栏代码块对应一个 code[data-test-id="code-content"]，
-      // 不用 pre 避免外层容器重复计入。
+      // each fenced code block maps to one code[data-test-id="code-content"],
+      // skip pre to avoid double-counting via outer containers.
       return Array.prototype.slice.call(
         document.querySelectorAll('code[data-test-id="code-content"]')
       );
     },
 
-    // Gemini 附件限制（2026-10-03 登录态实测）：
-    // - file input 平时不在 DOM 里，点「上传和工具」菜单后才渲染（2 个文档上传
-    //   + 1 个图片上传），所以这里先点开菜单、等 input 出现再注入；
-    //   为此本函数返回 Promise（content.js 用 Promise.resolve 兼容同步/异步）。
-    // - 文档上传 input 有明确的 accept 白名单（约 150 种扩展名：文档/数据/代码/
-    //   表格类，含 .zip；图片上传是 accept="image/*"）。用 input 自身的 accept
-    //   做预检，名单以页面实时读取为准，不在代码里硬编码。
-    // - 实测：txt / zip 均可作为附件接受（只到附件待发送阶段，未点发送，
-    //   服务端行为未知）。
+    // Gemini attachment limits (verified 2026-10-03, logged in):
+    // - file input is normally absent from the DOM; rendered only after opening the
+    //   "上传和工具" menu (2 document uploads + 1 image upload), so open the menu here,
+    //   wait for the input, then inject; hence this function returns a Promise
+    //   (content.js bridges sync/async via Promise.resolve).
+    // - Document upload inputs have an explicit accept whitelist (~150 extensions:
+    //   documents/data/code/spreadsheets, incl. .zip; image upload is accept="image/*").
+    //   Pre-check against the input's own accept, read live from the page — never hard-coded.
+    // - Verified: txt / zip both accepted as attachments (only reached the pending-send
+    //   stage; send never clicked, server behavior unknown).
     uploadFile: function (file) {
       // file: {name, mime, bytes(Uint8Array)}
       return new Promise(function (resolve) {
@@ -40,7 +41,7 @@
           var inputs = document.querySelectorAll('input[type=file]');
           for (var i = 0; i < inputs.length; i++) {
             var acc = (inputs[i].getAttribute('accept') || '').toLowerCase();
-            // 文档上传 input 的 accept 很长且含 .zip；图片上传的是 image/*
+            // document upload input's accept is long and includes .zip; image upload is image/*
             if (acc && acc.indexOf('image/*') !== 0 && acc.indexOf('.zip') !== -1) {
               return inputs[i];
             }
@@ -52,7 +53,7 @@
           var acc = (input.getAttribute('accept') || '').toLowerCase();
           var m = /\.([a-z0-9]+)$/i.exec(name || '');
           var ext = m ? m[1].toLowerCase() : '';
-          if (!ext) return true; // 无后缀：不拦，交给站点自己判断
+          if (!ext) return true; // no extension: don't block; let the site decide
           var parts = acc.split(',');
           for (var i = 0; i < parts.length; i++) {
             var p = parts[i].trim();
@@ -70,8 +71,8 @@
 
         function inject(input) {
           if (!acceptOk(input, file.name)) {
-            done(false, 'Gemini 不收这种文件（' + file.name +
-              '），仅支持文档/数据/代码/表格类及图片');
+            done(false, 'Gemini rejects this file type (' + file.name +
+              '); only documents/data/code/spreadsheets and images are supported');
             return;
           }
           var blob, f;
@@ -79,7 +80,7 @@
             blob = new Blob([file.bytes], { type: file.mime || 'application/octet-stream' });
             f = new File([blob], file.name, { type: file.mime || 'application/octet-stream' });
           } catch (e) {
-            done(false, '构造 File 失败：' + e.message);
+            done(false, 'failed to construct File: ' + e.message);
             return;
           }
           var dt = new DataTransfer();
@@ -87,7 +88,7 @@
           try {
             input.files = dt.files;
           } catch (e) {
-            done(false, '写入 input.files 失败：' + e.message);
+            done(false, 'failed to write input.files: ' + e.message);
             return;
           }
           input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -98,10 +99,10 @@
 
         var input = findDocInput();
         if (input) { inject(input); return; }
-        // input 还没渲染：点开「上传和工具」菜单等它出现
+        // input not rendered yet: open the "上传和工具" menu and wait for it
         var menuBtn = document.querySelector(
           'button[aria-label="上传和工具"], button[aria-label="上传"]');
-        if (!menuBtn) { done(false, '找不到上传菜单按钮'); return; }
+        if (!menuBtn) { done(false, 'upload menu button not found'); return; }
         menuBtn.click();
         var tries = 0;
         var timer = setInterval(function () {
@@ -110,7 +111,7 @@
           if (inp) { clearInterval(timer); inject(inp); }
           else if (tries >= 20) {
             clearInterval(timer);
-            done(false, '上传菜单打开后仍无 file input');
+            done(false, 'still no file input after upload menu opened');
           }
         }, 150);
       });
@@ -124,7 +125,7 @@
       var ok = false;
       try { ok = document.execCommand('insertText', false, text); } catch (e) { ok = false; }
       if (!ok) {
-        // Quill 占位是 <p><br></p>；execCommand 失败时直接追加文本并触发 input。
+        // Quill placeholder is <p><br></p>; if execCommand fails, append text directly and fire input.
         ce.textContent = (ce.textContent || '') + text;
         ce.dispatchEvent(new Event('input', { bubbles: true }));
       }

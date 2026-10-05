@@ -2,6 +2,12 @@
 // Two controls: Test Bridge (a real ping through background's native port)
 // and the auto-send toggle.
 
+// Extension version in the title (dynamic from manifest, never stale).
+try {
+  document.getElementById('ver').textContent =
+    'v' + chrome.runtime.getManifest().version;
+} catch (e) {}
+
 var statusEl = document.getElementById('status');
 var autoEl = document.getElementById('autosend');
 

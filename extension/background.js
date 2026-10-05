@@ -302,7 +302,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   var pid = "pingtest-" + Date.now() + "-" + Math.floor(Math.random() * 1e6);
   var timer = setTimeout(function () {
     pingTests.delete(pid);
-    try { sendResponse({ ok: false, error: "host 无回音（10 秒超时）" }); } catch (e) {}
+    try { sendResponse({ ok: false, error: "host silent (10s timeout)" }); } catch (e) {}
   }, 10000);
   try {
     pingTests.set(pid, { timer: timer, sendResponse: sendResponse });
@@ -310,7 +310,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   } catch (e) {
     pingTests.delete(pid);
     clearTimeout(timer);
-    try { sendResponse({ ok: false, error: "连接 host 失败：" + e.message }); } catch (ee) {}
+    try { sendResponse({ ok: false, error: "failed to reach host: " + e.message }); } catch (ee) {}
   }
   return true; // 异步回包，保持消息通道
+});
+
+// ---------- Onboarding: open setup page after install ----------
+// The extension is useless without the local host; the setup page stays
+// in setup state until the host answers (no one-time dismiss).
+chrome.runtime.onInstalled.addListener(function (details) {
+  if (details && details.reason === "install") {
+    try {
+      chrome.tabs.create({ url: chrome.runtime.getURL("onboarding.html") });
+    } catch (e) {}
+  }
 });

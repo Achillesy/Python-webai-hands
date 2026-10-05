@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>webai-hands — Setup</title>
+<style>
+  body { font: 15px/1.7 system-ui, -apple-system, sans-serif; color: #222; margin: 0; background: #fafafa; }
+  .wrap { max-width: 640px; margin: 48px auto; padding: 0 24px; }
+  h1 { font-size: 26px; margin: 0 0 8px; }
+  .sub { color: #555; margin: 0 0 28px; }
+  .card { background: #fff; border: 1px solid #e2e2e2; border-radius: 10px; padding: 20px 22px; margin: 0 0 18px; }
+  .card h2 { font-size: 16px; margin: 0 0 10px; }
+  .card p { margin: 8px 0; }
+  .cmd { display: flex; align-items: center; gap: 10px; background: #f4f4f4; border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px 12px; margin: 8px 0; font-family: ui-monospace, monospace; font-size: 13px; overflow-x: auto; }
+  .cmd code { flex: 1; white-space: nowrap; }
+  button { cursor: pointer; font-size: 14px; padding: 8px 18px; border-radius: 6px; border: 1px solid #ccc; background: #fff; }
+  button.primary { background: #1a73e8; border-color: #1a73e8; color: #fff; }
+  button.small { font-size: 12px; padding: 4px 10px; }
+  #status { font-weight: 600; }
+  #status.ok { color: #1b7f3b; }
+  #status.bad { color: #c62828; }
+  .uuid { font-family: ui-monospace, monospace; background: #f4f4f4; padding: 2px 8px; border-radius: 4px; word-break: break-all; }
+  .hint { color: #666; font-size: 13px; }
+  .example { background: #f4f4f4; border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px 12px; font-family: ui-monospace, monospace; font-size: 13px; overflow-x: auto; white-space: pre; }
+  #success { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Welcome to webai-hands</h1>
+  <p class="sub">One more step: this extension needs a small local helper before the AI can run commands on your computer.</p>
+
+  <div class="card">
+    <h2>Status</h2>
+    <p><span id="status">Checking…</span></p>
+    <p><button id="test" class="primary">Test Connection</button></p>
+    <p class="hint" id="status-hint"></p>
+  </div>
+
+  <div class="card" id="install-card">
+    <h2>Step 1 — Install the local helper</h2>
+    <p>Copy the line for your system, paste it into a terminal, press Enter. No admin rights needed.</p>
+    <p><strong>macOS / Linux</strong></p>
+    <div class="cmd"><code id="cmd-mac">curl -fsSL https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py | python3</code><button class="small" data-copy="cmd-mac">Copy</button></div>
+    <p><strong>Windows (PowerShell)</strong></p>
+    <div class="cmd"><code id="cmd-win">py -3 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py').read())"</code><button class="small" data-copy="cmd-win">Copy</button></div>
+    <p class="hint">This installs the helper into <span class="uuid">~/.webai-hands/</span> and registers it with Chrome.</p>
+  </div>
+
+  <div class="card" id="success">
+    <h2>Step 2 — You're connected</h2>
+    <p>Your machine ID (every command must carry this so it reaches <em>your</em> computer):</p>
+    <p><span class="uuid" id="uuid"></span> <button class="small" id="copy-uuid">Copy UUID</button></p>
+    <p>Open <a href="https://muse.ai" target="_blank">muse.ai</a>, start a chat, and paste:</p>
+    <div class="example" id="example"></div>
+    <p class="hint">Every command block needs <span class="uuid">"v":2</span>, a unique <span class="uuid">"id"</span>, and your <span class="uuid">"host"</span> UUID.</p>
+  </div>
+</div>
+<script src="onboarding.js"></script>
+</body>
+</html>

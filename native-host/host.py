@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-# webai-hands 本地 host（Chrome Native Messaging）
+# webai-hands local host (Chrome Native Messaging)
 #
-# Chrome 通过 stdio 把它拉起：扩展发来的消息是 4 字节小端长度前缀
-# + UTF-8 JSON，host 同格式回。host 不监听任何网络端口。
+# Chrome spawns it over stdio: incoming messages are a 4-byte little-endian
+# length prefix + UTF-8 JSON, and replies use the same format. The host
+# never listens on any network port.
 #
-# 安全约定：host 只被白名单扩展 ID 唤起（见 install.py 的
-# allowed_origins）；密码与提权不经过这里——需要提权时由命令本身
-# 触发系统 UAC，host 不接收、不保存任何口令。
+# Security: only allowlisted extension IDs can wake it (see install.py's
+# allowed_origins). Passwords and privilege escalation never pass through
+# here — when elevation is needed, the command itself triggers the OS
+# UAC prompt; the host neither receives nor stores any credentials.
+#
+# Layout: the host lives in ~/.webai-hands/ (installed by install.py).
+# Runtime state goes under log/, reusable scripts under skill/.
+# All paths below are relative to this file, so the host works wherever
+# it is installed from.
 
 import base64
 import json
@@ -21,10 +28,12 @@ import time
 import uuid
 import ctx_summary
 
-LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host.log")
-DEFAULT_TIMEOUT = 120  # 秒；M1 先给保守值，截断/超时策略 M3 定型
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_DIR = os.path.join(BASE_DIR, "log")
+LOG_PATH = os.path.join(LOG_DIR, "host.log")
+DEFAULT_TIMEOUT = 120  # seconds; conservative for now
 HOST_CWD = os.path.expanduser("~")  # fixed cwd: predictable, idempotent
-HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exec_history.json")
+HISTORY_PATH = os.path.join(LOG_DIR, "exec_history.json")
 HISTORY_LIMIT = 500  # 最多保留最近 500 条 id 的执行记录
 HISTORY_MAX_BYTES = 1 * 1024 * 1024  # 文件总大小上限 1MB（条数之外的双保险）
 STDOUT_HEAD_LEN = 500  # 每条只保留输出前 500 字符（ctx_summary 只用前 80）
@@ -40,9 +49,17 @@ FILE_DENY = (
     "/.env", "credentials", "keychain", "cookies", "login data",
     "/etc/shadow", "/etc/sudoers", ".netrc", ".pgpass",
 )
-# 机器唯一标识：hostname 可重名、可被改动，不能做身份标识；
-# machine_id 是 uuid4，与人类命名解耦，host 首次运行时生成并持久化。
-MACHINE_ID_PATH = os.path.join(os.path.expanduser("~"), ".config", "webai-hands", "machine.json")
+# Machine identity: hostnames can collide and be renamed, so they can't
+# identify a machine. machine_id is a uuid4, decoupled from human naming.
+# The host generates it on first run and persists it. Identity follows the
+# machine, not the browser profile (reinstalling the extension keeps it).
+# Deleting the file rotates the identity — old blocks addressed to the
+# previous id naturally stop matching, which is the expected behavior.
+MACHINE_ID_PATH = os.path.join(BASE_DIR, "machine.json")
+# Pre-~/.webai-hands location; kept as a read fallback so upgrading
+# doesn't rotate the identity. install.py migrates it on reinstall.
+LEGACY_MACHINE_ID_PATH = os.path.join(
+    os.path.expanduser("~"), ".config", "webai-hands", "machine.json")
 
 
 def log(line):
@@ -98,19 +115,18 @@ def save_history(hist):
 
 
 def get_machine_id():
-    # 机器唯一标识：host 首次运行时生成 uuid4 并持久化到本机文件。
-    # 身份跟机器走，不跟浏览器 profile 走（重装扩展不改变机器身份）。
-    # 删文件重装 = 身份轮换，旧块的 host 点名自然失效，属预期行为。
-    try:
-        with open(MACHINE_ID_PATH, "r", encoding="utf-8") as f:
-            mid = json.load(f).get("machine_id")
-        if mid:
-            return mid
-    except (OSError, ValueError, AttributeError):
-        pass
+    # Machine identity: generated once as uuid4, persisted to a local file.
+    # Identity follows the machine, not the browser profile.
+    for path in (MACHINE_ID_PATH, LEGACY_MACHINE_ID_PATH):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                mid = json.load(f).get("machine_id")
+            if mid:
+                return mid
+        except (OSError, ValueError, AttributeError):
+            pass
     mid = str(uuid.uuid4())
     try:
-        os.makedirs(os.path.dirname(MACHINE_ID_PATH), exist_ok=True)
         with open(MACHINE_ID_PATH, "w", encoding="utf-8") as f:
             json.dump({"machine_id": mid}, f)
         os.chmod(MACHINE_ID_PATH, 0o600)
@@ -362,6 +378,10 @@ MACHINE_ID = None
 
 def main():
     global HISTORY, MACHINE_ID
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+    except OSError:
+        pass
     HISTORY = load_history()
     MACHINE_ID = get_machine_id()
     log("host started platform=%s hostname=%s machine_id=%s history=%d" % (

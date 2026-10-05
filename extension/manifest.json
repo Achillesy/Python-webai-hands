@@ -20,7 +20,7 @@
       "run_at": "document_idle"
     }
   ],
-  "description": "把网页 AI 聊天里的命令块递给本机程序执行，再把结果填回页面。",
+  "description": "Give muse.ai hands on your computer — turn chat into action.",
   "host_permissions": [
     "https://muse.ai/*",
     "https://chat.deepseek.com/*"

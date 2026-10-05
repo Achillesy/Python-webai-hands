@@ -1,32 +1,75 @@
 #!/usr/bin/env python3
-# webai-hands 本地 host 安装（每台机器运行一次）
+# webai-hands local host installer (run once per machine; re-run after
+# `git pull` to refresh the host).
 #
-# 干两件事：
-# 1. 生成 com.webai.hands.json（Native Messaging host 清单；里面写的是
-#    本机绝对路径，所以不进 git、每台现生成）；
-# 2. 把它登记到 Chrome：Windows 写 HKCU 注册表 NativeMessagingHosts，
-#    macOS 放进 Chrome 的 NativeMessagingHosts 目录。
+# Does two things:
+# 1. Copies the host program into ~/.webai-hands/ (log/ and skill/
+#    subdirectories are created; a machine.json from the legacy
+#    ~/.config/webai-hands/ location is migrated so the machine
+#    identity is preserved).
+# 2. Registers com.webai.hands.json with Chrome: HKCU registry on
+#    Windows, Chrome's NativeMessagingHosts dir on macOS. The manifest
+#    points at the installed copy, never at the repo.
 #
-# 扩展 ID 有两个：开发版由 extension/manifest.json 里写死的 key 决定；
-# 商店版由 Chrome Web Store 分配（2026-10-03 提交审核时拿到）。
-# host 白名单两个都认，开发版和商店版可以同时装、同时用。
+# Two extension IDs are allowlisted: the dev build (pinned by the key
+# in extension/manifest.json) and the Chrome Web Store build.
 
 import json
 import os
+import shutil
 import sys
 
 HOST_NAME = "com.webai.hands"
 EXTENSION_IDS = [
-    "aaemlgedddakpgkfoakfmkdiiheplgnl",  # 开发版（源码加载已解压的扩展）
-    "pboakanoekehbongkmaeianbkebpfahl",  # Chrome Web Store 版
+    "aaemlgedddakpgkfoakfmkdiiheplgnl",  # dev build (unpacked)
+    "pboakanoekehbongkmaeianbkebpfahl",  # Chrome Web Store build
 ]
+STORE_URL = "https://chromewebstore.google.com/detail/pboakanoekehbongkmaeianbkebpfahl"
 HERE = os.path.dirname(os.path.abspath(__file__))
+INSTALL_DIR = os.path.expanduser("~/.webai-hands")
+HOST_FILES = ["host.py", "host.sh", "host.bat", "ctx_summary.py"]
+LEGACY_MACHINE_ID = os.path.join(
+    os.path.expanduser("~"), ".config", "webai-hands", "machine.json")
+
+SKILL_README = """\
+# skill/
+
+Drop reusable `.py` helper scripts here. The AI calls them through the
+host's exec at a fixed path, e.g.:
+
+    python3 ~/.webai-hands/skill/my_helper.py --args...
+
+Conventions:
+- Keep each script self-contained (stdlib only if possible).
+- Print machine-readable output (JSON lines preferred).
+- Never read secrets; the host already refuses sensitive paths.
+"""
 
 
 def host_launcher():
     if sys.platform == "win32":
-        return os.path.join(HERE, "host.bat")
-    return os.path.join(HERE, "host.sh")
+        return os.path.join(INSTALL_DIR, "host.bat")
+    return os.path.join(INSTALL_DIR, "host.sh")
+
+
+def install_files():
+    os.makedirs(os.path.join(INSTALL_DIR, "log"), exist_ok=True)
+    os.makedirs(os.path.join(INSTALL_DIR, "skill"), exist_ok=True)
+    for name in HOST_FILES:
+        src = os.path.join(HERE, name)
+        dst = os.path.join(INSTALL_DIR, name)
+        shutil.copy2(src, dst)
+    readme = os.path.join(INSTALL_DIR, "skill", "README.md")
+    if not os.path.exists(readme):
+        with open(readme, "w", encoding="utf-8") as f:
+            f.write(SKILL_README)
+    # Migrate machine identity from the legacy location (first run only).
+    new_id = os.path.join(INSTALL_DIR, "machine.json")
+    if not os.path.exists(new_id) and os.path.exists(LEGACY_MACHINE_ID):
+        shutil.copy2(LEGACY_MACHINE_ID, new_id)
+        print("Migrated machine identity from %s" % LEGACY_MACHINE_ID)
+    if sys.platform != "win32":
+        os.chmod(os.path.join(INSTALL_DIR, "host.sh"), 0o755)
 
 
 def write_manifest(target_path):
@@ -43,32 +86,35 @@ def write_manifest(target_path):
 
 
 def main():
+    install_files()
+    print("Installed host program to %s" % INSTALL_DIR)
+
     if sys.platform == "win32":
-        manifest_path = write_manifest(os.path.join(HERE, HOST_NAME + ".json"))
+        manifest_path = write_manifest(os.path.join(INSTALL_DIR, HOST_NAME + ".json"))
         import winreg
 
         key_path = "Software\\Google\\Chrome\\NativeMessagingHosts\\" + HOST_NAME
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
             winreg.SetValueEx(key, None, 0, winreg.REG_SZ, manifest_path)
-        print("已登记 host：HKCU\\%s" % key_path)
+        print("Registered host: HKCU\\%s" % key_path)
     elif sys.platform == "darwin":
         target_dir = os.path.expanduser(
             "~/Library/Application Support/Google/Chrome/NativeMessagingHosts"
         )
         os.makedirs(target_dir, exist_ok=True)
         manifest_path = write_manifest(os.path.join(target_dir, HOST_NAME + ".json"))
-        os.chmod(host_launcher(), 0o755)
-        print("已写入 host 清单：%s" % manifest_path)
+        print("Wrote host manifest: %s" % manifest_path)
     else:
-        print("暂不支持的平台：%s（先做 Windows，随后 macOS）" % sys.platform)
+        print("Unsupported platform: %s (Windows and macOS only)" % sys.platform)
         return 1
 
-    print("host 清单：%s" % manifest_path)
-    print("扩展 ID（已写进白名单）：%s" % ", ".join(EXTENSION_IDS))
+    print("Host manifest: %s" % manifest_path)
+    print("Allowlisted extension IDs: %s" % ", ".join(EXTENSION_IDS))
     print(
-        "下一步：Chrome 打开 chrome://extensions → 开开发者模式 → "
-        "加载已解压的扩展程序 → 选 extension 文件夹 → 点工具栏的 "
-        "webai-hands 图标，徽标出现 ✓ 即通桥。"
+        "Next: install the extension from the Chrome Web Store:\n"
+        "  %s\n"
+        "Then click the webai-hands toolbar icon — a \u2713 badge means the bridge is up."
+        % STORE_URL
     )
     return 0
 

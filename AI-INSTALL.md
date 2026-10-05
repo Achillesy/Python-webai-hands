@@ -17,18 +17,26 @@
 需要：Chrome（或 Chromium 系浏览器）+ Python 3。
 
 **装扩展（人手动做）：**
-1. 浏览器打开 chrome://extensions
-2. 右上角打开「开发者模式」
-3. 点「加载已解压的扩展程序」，选中仓库的 extension/ 目录
-4. 工具栏出现 webai-hands 图标
+从 Chrome Web Store 安装（自动更新）：
+https://chromewebstore.google.com/detail/pboakanoekehbongkmaeianbkebpfahl
+工具栏出现 webai-hands 图标。
 
 **装本机 host（人手动做，一次）：**
 - Windows：双击 native-host\install_windows.bat
   或 PowerShell 里 `cd native-host; py -3 install.py`
 - macOS：终端跑 `python3 native-host/install.py`
 
-install.py 生成 host 清单并登记到 Chrome（Windows 写 HKCU 注册表）。
-跑一次就够；之后更新代码不用重跑，除非仓库搬家或改名。
+install.py 把 host 程序复制到 `~/.webai-hands/`，再生成 host 清单并登记到 Chrome（Windows 写 HKCU 注册表，macOS 放 Chrome 的 NativeMessagingHosts 目录）。
+
+**本机目录结构（`~/.webai-hands/`）：**
+- `host.py` / `host.sh` / `host.bat` / `ctx_summary.py` — host 程序（install.py 复制过来）
+- `log/` — `host.log`、`exec_history.json`（运行时状态）
+- `skill/` — 可复用的 `.py` 小脚本，AI 通过 exec 按固定路径调用
+- `machine.json` — 本机 UUID（首次运行生成；老版本在 `~/.config/webai-hands/` 的会自动迁移）
+
+**更新 host：** `git pull` 后重跑一遍 install.py（复制新文件并重新登记）。扩展走商店自动更新，不用管。
+
+**卸载：** `python3 native-host/uninstall.py`（清注册表/清单 + 删 `~/.webai-hands/`）。
 
 ## 2. 验证：测通桥
 
@@ -78,10 +86,14 @@ host 回报 hostname、machine_id（本机 UUID，点名用）、platform、pid�
 ### 5.3 改了扩展代码后
 chrome://extensions 点重载 → 再刷新所有已打开的 chat 页面。两步缺一不可。
 
-### 5.4 项目改名 / 仓库搬家后
-注册表还指着旧路径，Chrome 静默失败。重跑 install.py，清理旧注册表项，重载扩展，刷新页面。
+### 5.4 host 升级 / 重装后桥不通
+host 程序在 `~/.webai-hands/`，与仓库解耦。`git pull` 后必须重跑 install.py（复制新文件并重新登记），否则 Chrome 可能还在调旧 host。
+排查：先确认 `~/.webai-hands/host.py` 的修改时间是不是最新的；再看 §5.1 注册表/清单指的路径是否指向 `~/.webai-hands/`。
 
-### 5.5 PowerShell 把 git push 的正常输出误报为错误
+### 5.5 卸载后重装
+`python3 native-host/uninstall.py` 会删掉 `~/.webai-hands/`（含 machine.json，本机身份轮换）。重装后发 `__diag__` 拿新的 machine_id，旧块里点的名自然失效，属预期行为。
+
+### 5.6 PowerShell 把 git push 的正常输出误报为错误
 
 现象：git push 报红色 NativeCommandError，但实际推送成功（远端引用已更新）。
 

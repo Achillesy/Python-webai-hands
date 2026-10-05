@@ -88,7 +88,7 @@ Mac 的 .local 名都不可靠），多机场景会误抓。
 **定稿方案（M4，已落地）**：块首行 JSON 必须带 host，值为目标机器的 machine_id（uuid4）；
 扩展只执行 host 与本机 UUID 完全相等的块，v2 门禁同时生效。
 
-- machine_id：host 首次运行生成 uuid4，持久化到 ~/.config/webai-hands/machine.json；
+- machine_id：host 首次运行生成 uuid4，持久化到 ~/.webai-hands/machine.json（老版本在 ~/.config/webai-hands/ 的自动迁移）；
   扩展握手时取得并缓存于 chrome.storage.local（MACHINE_KEY），面板可复制，__diag__ 也返回。
 - 点名：host 必须精确等于本机 UUID；host 为 * 是显式广播（慎用）；只有 __diag__ 块本身可免 host。
 - host 缺失：扩展不执行，自动回一条提醒（nag）告知本机 UUID，请换新 id 重发。fail-closed。

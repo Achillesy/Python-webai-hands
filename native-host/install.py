@@ -28,6 +28,9 @@ STORE_URL = "https://chromewebstore.google.com/detail/pboakanoekehbongkmaeianbke
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALL_DIR = os.path.expanduser("~/.webai-hands")
 HOST_FILES = ["host.py", "host.sh", "host.bat", "ctx_summary.py"]
+# Where to fetch the host program when install.py is downloaded standalone
+# (one-line install). Pinned to main; change to a tag if you need a fixed version.
+HOST_BASE_URL = "https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host"
 LEGACY_MACHINE_ID = os.path.join(
     os.path.expanduser("~"), ".config", "webai-hands", "machine.json")
 
@@ -52,13 +55,29 @@ def host_launcher():
     return os.path.join(INSTALL_DIR, "host.sh")
 
 
+def fetch_files():
+    # Two modes:
+    # - Source mode: host files sit next to install.py (git checkout) -> copy.
+    # - Standalone mode: install.py was downloaded alone (one-line install)
+    #   -> fetch the host files from GitHub.
+    if all(os.path.exists(os.path.join(HERE, n)) for n in HOST_FILES):
+        for name in HOST_FILES:
+            shutil.copy2(os.path.join(HERE, name), os.path.join(INSTALL_DIR, name))
+        print("Copied host files from %s" % HERE)
+        return
+    import urllib.request
+    for name in HOST_FILES:
+        url = "%s/%s" % (HOST_BASE_URL, name)
+        dst = os.path.join(INSTALL_DIR, name)
+        print("Downloading %s" % url)
+        urllib.request.urlretrieve(url, dst)
+    print("Downloaded host files from GitHub.")
+
+
 def install_files():
     os.makedirs(os.path.join(INSTALL_DIR, "log"), exist_ok=True)
     os.makedirs(os.path.join(INSTALL_DIR, "skill"), exist_ok=True)
-    for name in HOST_FILES:
-        src = os.path.join(HERE, name)
-        dst = os.path.join(INSTALL_DIR, name)
-        shutil.copy2(src, dst)
+    fetch_files()
     readme = os.path.join(INSTALL_DIR, "skill", "README.md")
     if not os.path.exists(readme):
         with open(readme, "w", encoding="utf-8") as f:

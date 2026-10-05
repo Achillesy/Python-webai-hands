@@ -1,7 +1,7 @@
 ﻿# AI-BLENDER.md — 用 webai-hands 驱动 Blender（给 AI 助手）
 
 > 用户想在 Blender 里建模、挪东西、渲染时读这份。前提：webai-hands
-> 已装好、桥已通（见 AI-INSTALL.md）。
+> 已装好、桥已通（安装见 README.md）。
 
 ## 0. 原理
 

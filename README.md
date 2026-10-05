@@ -6,7 +6,7 @@
 
 ## What is this?
 
-Open a **free** web AI (DeepSeek, Muse) and let this extension control
+Open a **free** web AI (Muse, DeepSeek) and let this extension control
 your computer.
 
 The web AI is no longer just a chat box — you ask, it answers, and you do
@@ -21,26 +21,70 @@ pair of working hands.
 
 ## Quick start
 
-**1. Get the project**
+**1. Install the extension**
 
-Clone it, or download the ZIP from GitHub:
+Get **webai-hands** from the Chrome Web Store (free, updates automatically):
 
-    git clone https://github.com/Achillesy/Python-webai-hands.git
+[Install from Chrome Web Store](https://chromewebstore.google.com/detail/pboakanoekehbongkmaeianbkebpfahl)
 
-**2. Open a web AI**
+**2. Install the local helper — one command**
 
-Go to [chat.deepseek.com](https://chat.deepseek.com) or [muse.ai](https://muse.ai).
-Both free tiers work.
+Copy the line for your system, paste it into a terminal, press Enter.
+It installs a small helper into `~/.webai-hands/` and registers it with Chrome.
+No admin rights needed.
 
-**3. Hand it the install guide**
+macOS / Linux:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py | python3
+```
 
-Upload **`AI-INSTALL.md`** into the chat (drag the file in, or paste its
-content). The AI walks you through installing the extension and the local
-helper, then verifies it works.
+Windows (PowerShell):
+```powershell
+py -3 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py').read())"
+```
 
+**3. Test the bridge, copy your machine ID**
+
+Click the **webai-hands** icon in the Chrome toolbar, then **Test Bridge**.
+- "Connected …" → the bridge is up.
+- Click **Copy UUID** — every command you send must carry this ID so it reaches *your* computer.
+
+**4. Send your first command**
+
+Open [muse.ai](https://muse.ai) (free), start a chat, and paste this block
+(replace `PASTE-YOUR-UUID-HERE` with the UUID you just copied):
+
+```muse-exec
+{"muse":"exec","v":2,"id":"ls-001","host":"PASTE-YOUR-UUID-HERE","cmd":"ls ~"}
+```
+
+Your computer lists your home directory, and the result appears in the chat.
 From now on, just talk:
 
 > "List the 10 biggest files in my Downloads folder."
+
+Every command block needs `"v":2`, a unique `"id"`, and your `"host"` UUID.
+
+**5. Uninstall — clean removal**
+
+Nothing phones home, nothing stays resident. One command removes the helper,
+its Chrome registration, logs, and data:
+
+macOS / Linux:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/uninstall.py | python3 - --yes
+```
+
+Windows (PowerShell):
+```powershell
+py -3 -c "import urllib.request,sys; sys.argv=['u','--yes']; exec(urllib.request.urlopen('https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/uninstall.py').read())"
+```
+
+What gets deleted:
+- the Chrome native-messaging registration
+- `~/.webai-hands/` — program, logs, skills, machine identity
+
+Then optionally remove the extension at `chrome://extensions`. No leftovers.
 
 ## Using it every day
 
@@ -53,10 +97,8 @@ The AI needs its manual in context. Which file depends on the site:
 
 Which file to give the AI:
 
-- First time / something's broken → `AI-INSTALL.md`
 - Everyday use → `AI-GUIDE.md`
 - Drive Blender → `AI-BLENDER.md`
-- Modify the extension / add a new site → `AI-EVOLUTION.md`
 
 ## What can it do?
 
@@ -70,9 +112,8 @@ Anything you can do in a terminal:
 ## For developers
 
 Small project: a Chrome MV3 extension plus a Python host. Adding a new
-website = one adapter file (~30–60 lines) + one line in `manifest.json`.
-Point your favorite coding AI at the repo and let it read the code — the
-adapter interface is documented in `AI-EVOLUTION.md`.
+website = one adapter file (~30–60 lines) + one line in `manifest.json`
+(see `extension/adapters/` for examples).
 
 ## Security
 

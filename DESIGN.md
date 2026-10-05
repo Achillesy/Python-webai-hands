@@ -1,7 +1,7 @@
 # webai-hands：设计文档
 
 > 本文记录架构设计与技术决策。命令块协议、适配器架构、安全边界的设计理由都在这里。
-> 操作指引见 README.md，AI 调试指引见 AI-EVOLUTION.md。
+> 操作指引见 README.md，AI 调试指引见 docs/archive/AI-EVOLUTION.md。
 
 ## 6. 正式版定稿：浏览器传输路线（2026-10-01 拍板）
 

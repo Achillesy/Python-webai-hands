@@ -28,10 +28,10 @@ After changing `host.py`: reload the extension so it respawns the host.
 
 ## Adding a new site adapter
 
-1. Read `AI-EVOLUTION.md` — it's the adapter author's guide.
+1. Read `docs/archive/AI-EVOLUTION.md` — it's the adapter author's guide.
 2. Copy `extension/adapters/muse.js` (~100 lines) as a starting point.
 3. Implement the adapter interface: block detection, `fillResult`, `trySend`,
-   and `uploadFile` (see `AI-EVOLUTION.md` for the contract).
+   and `uploadFile` (see `docs/archive/AI-EVOLUTION.md` for the contract).
 4. Register the site in `extension/manifest.json` (`content_scripts[].matches`
    and `host_permissions`).
 5. Use the `probe` block (`AI-GUIDE.md` §11) to inspect the site's DOM

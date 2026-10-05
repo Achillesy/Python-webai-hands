@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <style>
@@ -12,14 +12,14 @@
 </head>
 <body>
   <h1>webai-hands</h1>
-  <div class="row">本地 host：<span id="status">未测</span></div>
-  <div class="row"><button id="ping">测通桥</button></div>
-  <div class="row">本机标识：<span id="mid" class="mut">未知</span> <button id="copymid">复制 UUID</button></div>
+  <div class="row">Local host: <span id="status">not tested</span></div>
+  <div class="row"><button id="ping">Test Bridge</button></div>
+  <div class="row">Machine ID: <span id="mid" class="mut">unknown</span> <button id="copymid">Copy UUID</button></div>
   <label class="row" style="display:block">
-    <input type="checkbox" id="autosend"> 结果填回后自动发送
+    <input type="checkbox" id="autosend"> Auto-send after result is filled back
   </label>
-  <div class="mut">默认关：结果只填回输入框，你确认后再发送。开启后，命令结果一回来就会自动点发送。</div>
-  <div class="row mut">觉得有用？请作者喝杯咖啡：<a href="https://ko-fi.com/achillesy" target="_blank">Ko-fi</a> · <a href="https://paypal.me/achillesnewman" target="_blank">PayPal</a></div>
+  <div class="mut">Default off: the result is only filled into the input box; you confirm before sending. When on, the command result is sent automatically as soon as it comes back.</div>
+  <div class="row mut">Useful? Buy the author a coffee: <a href="https://ko-fi.com/achillesy" target="_blank">Ko-fi</a> · <a href="https://paypal.me/achillesnewman" target="_blank">PayPal</a></div>
   <script src="popup.js"></script>
 </body>
 </html>

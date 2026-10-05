@@ -48,7 +48,7 @@ py -3 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.github
 
 **4. 发送第一条命令**
 
-打开 [muse.ai](https://muse.ai)（免费），新开一个对话，粘贴下面这个代码块
+打开 [chat.deepseek.com](https://chat.deepseek.com)（免费），新开一个对话，粘贴下面这个代码块
 （把 `PASTE-YOUR-UUID-HERE` 换成你刚复制的 UUID）：
 
 ```muse-exec

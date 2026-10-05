@@ -12,6 +12,7 @@ venv/
 *.pem
 native-host/com.webai.hands.json
 native-host/exec_history.json
+native-host/log/
 local-archive/
 extension/*.bak
 *.bak

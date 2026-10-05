@@ -59,7 +59,12 @@ def main():
     print("  - %s" % INSTALL_DIR)
     print("  - %s (legacy)" % LEGACY_DIR)
     if "--yes" not in sys.argv:
-        answer = input("Continue? [y/N] ").strip().lower()
+        try:
+            answer = input("Continue? [y/N] ").strip().lower()
+        except EOFError:
+            # stdin is a pipe (e.g. curl ... | python3): no one can answer.
+            print("Aborted (no terminal input; re-run with --yes to skip this prompt).")
+            return 0
         if answer not in ("y", "yes"):
             print("Aborted.")
             return 0

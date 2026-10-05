@@ -5,6 +5,8 @@ want done on YOUR computer. The AI writes a command, webai-hands runs it
 locally, and the result comes back into the chat. No copy-pasting, no
 switching windows, no paid API keys.
 
+Works with your favorite web AI: Muse, DeepSeek, ChatGPT, and Gemini.
+
 WHAT IT DOES
 - Turn chat into action: organize files, search your disk, run git, and more —
   just by talking.

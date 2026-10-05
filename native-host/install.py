@@ -36,7 +36,10 @@ INSTALL_DIR = os.path.expanduser("~/.webai-hands")
 HOST_FILES = ["host.py", "host.sh", "host.bat", "ctx_summary.py"]
 # Where to fetch the host program when install.py is downloaded standalone
 # (one-line install). Pinned to main; change to a tag if you need a fixed version.
+# GitHub is tried first, then the Gitee mirror (for users in China where
+# GitHub raw is slow or blocked).
 HOST_BASE_URL = "https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host"
+HOST_MIRROR_URL = "https://gitee.com/achillesy/Python-webai-hands/raw/main/native-host"
 LEGACY_MACHINE_ID = os.path.join(
     os.path.expanduser("~"), ".config", "webai-hands", "machine.json")
 
@@ -61,23 +64,54 @@ def host_launcher():
     return os.path.join(INSTALL_DIR, "host.sh")
 
 
+def _download(url, dst, timeout=20):
+    import urllib.request
+    with urllib.request.urlopen(url, timeout=timeout) as resp, open(dst, "wb") as f:
+        shutil.copyfileobj(resp, f)
+
+
+def _working_base():
+    """Return the first reachable host-file base (GitHub, then Gitee mirror)."""
+    import urllib.request
+    probe = "/host.bat"  # smallest file, fast probe
+    for base in (HOST_BASE_URL, HOST_MIRROR_URL):
+        try:
+            with urllib.request.urlopen(base + probe, timeout=8) as r:
+                r.read(1)
+            return base
+        except Exception:
+            continue
+    return None
+
+
 def fetch_files():
     # Two modes:
     # - Source mode: host files sit next to install.py (git checkout) -> copy.
     # - Standalone mode: install.py was downloaded alone (one-line install)
-    #   -> fetch the host files from GitHub.
+    #   -> fetch the host files from GitHub, falling back to the Gitee mirror.
     if HERE and all(os.path.exists(os.path.join(HERE, n)) for n in HOST_FILES):
         for name in HOST_FILES:
             shutil.copy2(os.path.join(HERE, name), os.path.join(INSTALL_DIR, name))
         print("Copied host files from %s" % HERE)
         return
-    import urllib.request
+    base = _working_base()
+    if base is None:
+        raise RuntimeError("Cannot reach GitHub or Gitee. Check your network/proxy.")
+    print("Using host file source: %s" % base)
+    mirrors = [b for b in (HOST_BASE_URL, HOST_MIRROR_URL) if b != base]
     for name in HOST_FILES:
-        url = "%s/%s" % (HOST_BASE_URL, name)
         dst = os.path.join(INSTALL_DIR, name)
-        print("Downloading %s" % url)
-        urllib.request.urlretrieve(url, dst)
-    print("Downloaded host files from GitHub.")
+        for b in [base] + mirrors:
+            url = "%s/%s" % (b, name)
+            try:
+                print("Downloading %s" % url)
+                _download(url, dst)
+                break
+            except Exception as e:
+                print("  failed (%s), trying next mirror..." % e)
+        else:
+            raise RuntimeError("Failed to download %s from GitHub and Gitee" % name)
+    print("Downloaded host files.")
 
 
 def install_files():

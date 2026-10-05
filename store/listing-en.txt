@@ -1,6 +1,6 @@
-Give web AI a pair of hands.
+Give web AI hands on your computer.
 
-Chat with a free web AI — like DeepSeek's free tier — and tell it what you
+Chat with a free web AI — like Muse's free tier — and tell it what you
 want done on YOUR computer. The AI writes a command, webai-hands runs it
 locally, and the result comes back into the chat. No copy-pasting, no
 switching windows, no paid API keys.

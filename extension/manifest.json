@@ -20,7 +20,7 @@
       "run_at": "document_idle"
     }
   ],
-  "description": "Give muse.ai hands on your computer — turn chat into action.",
+  "description": "Give web AI hands on your computer — turn Q&A into output.",
   "host_permissions": [
     "https://muse.ai/*",
     "https://chat.deepseek.com/*"

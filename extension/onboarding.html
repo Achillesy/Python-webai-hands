@@ -13,6 +13,7 @@
   .card p { margin: 8px 0; }
   .cmd { display: flex; align-items: center; gap: 10px; background: #f4f4f4; border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px 12px; margin: 8px 0; font-family: ui-monospace, monospace; font-size: 13px; overflow-x: auto; }
   .cmd code { flex: 1; white-space: nowrap; }
+  .cmd button { flex-shrink: 0; position: sticky; left: 0; }
   button { cursor: pointer; font-size: 14px; padding: 8px 18px; border-radius: 6px; border: 1px solid #ccc; background: #fff; }
   button.primary { background: #1a73e8; border-color: #1a73e8; color: #fff; }
   button.small { font-size: 12px; padding: 4px 10px; }
@@ -41,9 +42,9 @@
     <h2>Step 1 — Install the local helper</h2>
     <p>Copy the line for your system, paste it into a terminal, press Enter. No admin rights needed.</p>
     <p><strong>macOS / Linux</strong></p>
-    <div class="cmd"><code id="cmd-mac">curl -fsSL https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py | python3</code><button class="small" data-copy="cmd-mac">Copy</button></div>
+    <div class="cmd"><button class="small" data-copy="cmd-mac">Copy</button><code id="cmd-mac">curl -fsSL https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py | python3</code></div>
     <p><strong>Windows (PowerShell)</strong></p>
-    <div class="cmd"><code id="cmd-win">py -3 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py').read())"</code><button class="small" data-copy="cmd-win">Copy</button></div>
+    <div class="cmd"><button class="small" data-copy="cmd-win">Copy</button><code id="cmd-win">py -3 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py').read())"</code></div>
     <p class="hint">This installs the helper into <span class="uuid">~/.webai-hands/</span> and registers it with Chrome.</p>
   </div>
 

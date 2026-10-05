@@ -219,7 +219,7 @@ function ensureNativePort() {
     for (const [id, entry] of pending) {
       try {
         entry.port.postMessage({ type: "error", id, gen: entry.gen,
-                                 error: "本地 host 连接已断开" });
+                                 error: "local host disconnected" });
       } catch (e) {}
     }
     pending.clear();
@@ -227,7 +227,7 @@ function ensureNativePort() {
     // 办法二：host 断开时，未完成的测通桥也立即报错，不让它等到 10 秒超时
     for (const [pid, pt] of pingTests) {
       clearTimeout(pt.timer);
-      try { pt.sendResponse({ ok: false, error: "本地 host 连接已断开" }); } catch (e) {}
+      try { pt.sendResponse({ ok: false, error: "local host disconnected" }); } catch (e) {}
     }
     pingTests.clear();
     // 排队未发的也一并报错，不静默吞掉
@@ -236,7 +236,7 @@ function ensureNativePort() {
       dropSchedItem(it);
       try {
         it.port.postMessage({ type: "error", id: it.msg.id, gen: it.gen,
-          error: "本地 host 连接已断开（排队中）" });
+          error: "local host disconnected (queued)" });
       } catch (e) {}
     }
   });

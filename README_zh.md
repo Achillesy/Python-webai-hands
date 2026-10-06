@@ -40,6 +40,8 @@ Windows（PowerShell）：
 py -3 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py').read())"
 ```
 
+> ⚠️ **Windows 用户注意**：如果提示找不到 `py`/`python`，请先安装 Python（方式一：Microsoft Store 搜索 Python 安装；方式二：PowerShell 运行 `winget install Python.Python.3.13`），装完后重新打开终端再粘贴上面的命令。
+
 **3. 测试桥，复制本机 ID**
 
 点 Chrome 工具栏上的 **webai-hands** 图标，再点 **Test Bridge**（测试桥）。

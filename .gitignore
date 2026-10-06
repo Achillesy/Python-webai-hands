@@ -21,4 +21,4 @@ extension/*.bak
 store/*.zip
 
 # extension build artifacts (available via GitHub Releases)
-dist/*.zip
+dist/

@@ -32,10 +32,11 @@ Blender Lab MCP 插件（Extension id `mcp`）。不要试图自己写一个 soc
 
 ## 2. 怎么发命令
 
-把 Python 代码写进一个文件，再用仓库里的客户端发：
+把 Python 代码写进一个文件，再用安装时放进 `~/.webai-hands/skill/` 的客户端发
+（固定路径，与仓库位置无关；重跑一遍 install.py 即可获得）：
 
-    py -3 examples/blender/mcp_exec.py D:\tmp\do.py        （Windows）
-    python3 examples/blender/mcp_exec.py /tmp/do.py        （macOS）
+    py -3 %USERPROFILE%\.webai-hands\skill\mcp_exec.py D:\tmp\do.py        （Windows）
+    python3 ~/.webai-hands/skill/mcp_exec.py /tmp/do.py                    （macOS）
 
 典型做法：先发 muse-exec 块把 Python 代码写到临时文件，再发一块调
 mcp_exec.py 执行它。两步分开，出错好定位。

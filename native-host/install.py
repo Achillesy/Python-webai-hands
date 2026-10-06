@@ -33,7 +33,8 @@ except NameError:
     # standalone mode: fetch the host files from the network.
     HERE = None
 INSTALL_DIR = os.path.expanduser("~/.webai-hands")
-HOST_FILES = ["host.py", "host.sh", "host.bat", "ctx_summary.py"]
+HOST_FILES = ["host.py", "host.sh", "host.bat", "ctx_summary.py",
+              "skill/mcp_exec.py"]  # Blender MCP socket client (fixed path below)
 # Where to fetch the host program when install.py is downloaded standalone
 # (one-line install). Pinned to main; change to a tag if you need a fixed version.
 # GitHub is tried first, then the Gitee mirror (for users in China where

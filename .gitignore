@@ -19,3 +19,6 @@ extension/*.bak
 
 # store submission artifacts (reproducible via store/build.sh)
 store/*.zip
+
+# extension build artifacts (available via GitHub Releases)
+dist/*.zip

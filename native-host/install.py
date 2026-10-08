@@ -2,12 +2,15 @@
 # webai-hands local host installer (run once per machine; re-run after
 # `git pull` to refresh the host).
 #
-# Does two things:
+# Does three things:
 # 1. Copies the host program into ~/.webai-hands/ (log/ and skill/
 #    subdirectories are created; a machine.json from the legacy
 #    ~/.config/webai-hands/ location is migrated so the machine
 #    identity is preserved).
-# 2. Registers com.webai.hands.json with Chrome: HKCU registry on
+# 2. Copies the AI operator guides (AI-GUIDE.md / AI-BLENDER.md, from the
+#    repo root) into ~/.webai-hands/ so store users without a checkout
+#    have them locally; refreshed on every reinstall.
+# 3. Registers com.webai.hands.json with Chrome: HKCU registry on
 #    Windows, Chrome's NativeMessagingHosts dir on macOS. The manifest
 #    points at the installed copy, never at the repo.
 #
@@ -35,6 +38,8 @@ except NameError:
 INSTALL_DIR = os.path.expanduser("~/.webai-hands")
 HOST_FILES = ["host.py", "host.sh", "host.bat", "ctx_summary.py",
               "skill/mcp_exec.py"]  # Blender MCP socket client (fixed path below)
+# AI operator guides live at the repo root, not under native-host/.
+DOC_FILES = ["AI-GUIDE.md", "AI-BLENDER.md"]
 # Where to fetch the host program when install.py is downloaded standalone
 # (one-line install). Pinned to main; change to a tag if you need a fixed version.
 # GitHub is tried first, then the Gitee mirror (for users in China where
@@ -85,34 +90,67 @@ def _working_base():
     return None
 
 
+def _net_base_or_raise():
+    base = _working_base()
+    if base is None:
+        raise RuntimeError("Cannot reach GitHub or Gitee. Check your network/proxy.")
+    return base
+
+
+def _download_one(name, base, mirrors):
+    """Download one file into INSTALL_DIR, trying base then mirrors."""
+    dst = os.path.join(INSTALL_DIR, name)
+    for b in [base] + mirrors:
+        url = "%s/%s" % (b, name)
+        try:
+            print("Downloading %s" % url)
+            _download(url, dst)
+            return
+        except Exception as e:
+            print("  failed (%s), trying next mirror..." % e)
+    raise RuntimeError("Failed to download %s from GitHub and Gitee" % name)
+
+
 def fetch_files():
     # Two modes:
     # - Source mode: host files sit next to install.py (git checkout) -> copy.
     # - Standalone mode: install.py was downloaded alone (one-line install)
     #   -> fetch the host files from GitHub, falling back to the Gitee mirror.
+    net_base = None
     if HERE and all(os.path.exists(os.path.join(HERE, n)) for n in HOST_FILES):
         for name in HOST_FILES:
             shutil.copy2(os.path.join(HERE, name), os.path.join(INSTALL_DIR, name))
         print("Copied host files from %s" % HERE)
-        return
-    base = _working_base()
-    if base is None:
-        raise RuntimeError("Cannot reach GitHub or Gitee. Check your network/proxy.")
-    print("Using host file source: %s" % base)
-    mirrors = [b for b in (HOST_BASE_URL, HOST_MIRROR_URL) if b != base]
-    for name in HOST_FILES:
-        dst = os.path.join(INSTALL_DIR, name)
-        for b in [base] + mirrors:
-            url = "%s/%s" % (b, name)
-            try:
-                print("Downloading %s" % url)
-                _download(url, dst)
-                break
-            except Exception as e:
-                print("  failed (%s), trying next mirror..." % e)
-        else:
-            raise RuntimeError("Failed to download %s from GitHub and Gitee" % name)
-    print("Downloaded host files.")
+    else:
+        net_base = _net_base_or_raise()
+        print("Using host file source: %s" % net_base)
+        mirrors = [b for b in (HOST_BASE_URL, HOST_MIRROR_URL) if b != net_base]
+        for name in HOST_FILES:
+            _download_one(name, net_base, mirrors)
+        print("Downloaded host files.")
+    # AI operator guides (AI-GUIDE.md / AI-BLENDER.md): they live at the repo
+    # root, not under native-host/. Store users have no checkout, so ship them
+    # into the install dir where users can find them to upload into AI chats.
+    # Unlike machine.json they are refreshed on every reinstall.
+    repo_root = os.path.dirname(HERE) if HERE else None
+    if repo_root and all(os.path.exists(os.path.join(repo_root, n)) for n in DOC_FILES):
+        for name in DOC_FILES:
+            shutil.copy2(os.path.join(repo_root, name), os.path.join(INSTALL_DIR, name))
+        print("Copied AI guides from %s" % repo_root)
+    else:
+        # standalone: reuse the already-probed working mirror, but at the repo
+        # root instead of native-host/.
+        if net_base is None:
+            net_base = _net_base_or_raise()
+        suffix = "/native-host"
+        doc_base = net_base[:-len(suffix)] if net_base.endswith(suffix) else net_base
+        doc_mirrors = [
+            b[:-len(suffix)] if b.endswith(suffix) else b
+            for b in (HOST_BASE_URL, HOST_MIRROR_URL) if b != net_base
+        ]
+        for name in DOC_FILES:
+            _download_one(name, doc_base, doc_mirrors)
+        print("Downloaded AI guides.")
 
 
 def install_files():
@@ -175,6 +213,11 @@ def main():
         "  %s\n"
         "Then click the webai-hands toolbar icon — a \u2713 badge means the bridge is up."
         % STORE_URL
+    )
+    print(
+        "AI guides installed to %s\n"
+        "  New task? Upload AI-GUIDE.md to your AI chat to begin (see README)."
+        % INSTALL_DIR
     )
     return 0
 

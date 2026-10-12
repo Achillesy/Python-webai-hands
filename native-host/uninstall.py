@@ -51,6 +51,14 @@ def remove_dirs():
             print("Removed directory: %s" % path)
         else:
             print("Directory not present, skipping: %s" % path)
+    # Bootstrap guide copy installed by install.py into ~/Documents.
+    guide = os.path.join(os.path.expanduser("~"), "Documents",
+                         "webai-hands-guide.md")
+    if os.path.isfile(guide):
+        os.remove(guide)
+        print("Removed file: %s" % guide)
+    else:
+        print("File not present, skipping: %s" % guide)
 
 
 def main():

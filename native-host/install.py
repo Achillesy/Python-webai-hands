@@ -40,6 +40,11 @@ HOST_FILES = ["host.py", "host.sh", "host.bat", "ctx_summary.py",
               "skill/mcp_exec.py"]  # Blender MCP socket client (fixed path below)
 # AI operator guides live at the repo root, not under native-host/.
 DOC_FILES = ["AI-GUIDE.md", "AI-BLENDER.md"]
+# Human bootstrap guide (repo root template with {{INSTALL_DIR}} placeholder).
+# Rendered with the real path and dropped in ~/Documents where ordinary users
+# can find it; the install dir itself is a hidden dot-folder.
+BOOTSTRAP_GUIDE = "webai-hands-guide.md"
+DOCUMENTS_DIR = os.path.join(os.path.expanduser("~"), "Documents")
 # Where to fetch the host program when install.py is downloaded standalone
 # (one-line install). Pinned to main; change to a tag if you need a fixed version.
 # GitHub is tried first, then the Gitee mirror (for users in China where
@@ -153,10 +158,60 @@ def fetch_files():
         print("Downloaded AI guides.")
 
 
+def install_bootstrap_guide():
+    """Render webai-hands-guide.md ({{INSTALL_DIR}} -> real path) into ~/Documents.
+
+    Source mode: read the template from the repo root. Standalone mode:
+    download it from the repo root URL (same mirror logic as DOC_FILES).
+    Refreshed on every reinstall, like the AI guides.
+    """
+    name = BOOTSTRAP_GUIDE
+    template = None
+    repo_root = os.path.dirname(HERE) if HERE else None
+    local = os.path.join(repo_root, name) if repo_root else None
+    if local and os.path.exists(local):
+        with open(local, encoding="utf-8") as f:
+            template = f.read()
+        print("Bootstrap guide template: %s" % local)
+    else:
+        base = _net_base_or_raise()
+        suffix = "/native-host"
+        roots = [b[:-len(suffix)] if b.endswith(suffix) else b
+                 for b in [base] + [u for u in (HOST_BASE_URL, HOST_MIRROR_URL) if u != base]]
+        import tempfile
+        for r in roots:
+            url = "%s/%s" % (r, name)
+            fd, tmp = tempfile.mkstemp(prefix="webai-hands-", suffix=".md")
+            os.close(fd)
+            try:
+                print("Downloading %s" % url)
+                _download(url, tmp)
+                with open(tmp, encoding="utf-8") as f:
+                    template = f.read()
+                break
+            except Exception as e:
+                print("  failed (%s), trying next mirror..." % e)
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+        if template is None:
+            raise RuntimeError("Failed to download %s" % name)
+    rendered = template.replace("{{INSTALL_DIR}}", INSTALL_DIR)
+    dst = os.path.join(DOCUMENTS_DIR, BOOTSTRAP_GUIDE)
+    try:
+        with open(dst, "w", encoding="utf-8") as f:
+            f.write(rendered)
+    except OSError as e:
+        print("WARNING: cannot write %s: %s (skipped)" % (dst, e))
+        return
+    print("Bootstrap guide -> %s" % dst)
+
+
 def install_files():
     os.makedirs(os.path.join(INSTALL_DIR, "log"), exist_ok=True)
     os.makedirs(os.path.join(INSTALL_DIR, "skill"), exist_ok=True)
     fetch_files()
+    install_bootstrap_guide()
     readme = os.path.join(INSTALL_DIR, "skill", "README.md")
     if not os.path.exists(readme):
         with open(readme, "w", encoding="utf-8") as f:
@@ -218,6 +273,11 @@ def main():
         "AI guides installed to %s\n"
         "  New task? Upload AI-GUIDE.md to your AI chat to begin (see README)."
         % INSTALL_DIR
+    )
+    print(
+        "Setup guide for humans: %s\n"
+        "  Open it and follow the steps to verify the bridge."
+        % os.path.join(DOCUMENTS_DIR, BOOTSTRAP_GUIDE)
     )
     return 0
 

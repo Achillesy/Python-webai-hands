@@ -32,12 +32,12 @@
 
 macOS / Linux：
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py | python3
+curl -fsSL https://gitee.com/achillesy/Python-webai-hands/raw/main/native-host/install.py | python3
 ```
 
 Windows（PowerShell）：
 ```powershell
-py -3 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/install.py').read())"
+py -3 -c "import urllib.request; exec(urllib.request.urlopen('https://gitee.com/achillesy/Python-webai-hands/raw/main/native-host/install.py').read())"
 ```
 
 > ⚠️ **Windows 用户注意**：如果提示找不到 `py`/`python`，请先安装 Python（方式一：Microsoft Store 搜索 Python 安装；方式二：PowerShell 运行 `winget install Python.Python.3.13`），装完后重新打开终端再粘贴上面的命令。
@@ -70,12 +70,12 @@ py -3 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.github
 
 macOS / Linux：
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/uninstall.py | python3 - --yes
+curl -fsSL https://gitee.com/achillesy/Python-webai-hands/raw/main/native-host/uninstall.py | python3 - --yes
 ```
 
 Windows（PowerShell）：
 ```powershell
-py -3 -c "import urllib.request,sys; sys.argv=['u','--yes']; exec(urllib.request.urlopen('https://raw.githubusercontent.com/Achillesy/Python-webai-hands/main/native-host/uninstall.py').read())"
+py -3 -c "import urllib.request,sys; sys.argv=['u','--yes']; exec(urllib.request.urlopen('https://gitee.com/achillesy/Python-webai-hands/raw/main/native-host/uninstall.py').read())"
 ```
 
 会删掉这些：
